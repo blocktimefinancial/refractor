@@ -14,22 +14,25 @@
     "url": "https://github.com/stellar-expert/coordinator-stellar-expert.git"
   },
   "dependencies": {
-    "@google-cloud/firestore": "^4.9.4",
-    "@stellar-expert/tx-signers-inspector": "^1.8.1",
-    "@stellar/stellar-sdk": "11.2.2",
-    "axios": "^1.1.3",
-    "body-parser": "^1.20.1",
-    "cors": "^2.8.5",
-    "express": "^4.18.3",
-    "express-rate-limit": "^5.2.3",
-    "fastq": "^1.13.0",
-    "lru-cache": "^7.14.1",
-    "mongodb": "^4.11.0",
-    "morgan": "^1.10.0",
-    "pg": "^8.8.0",
-    "pg-connection-string": "^2.5.0"
+    "@google-cloud/firestore": "latest",
+    "@stellar-expert/tx-signers-inspector": "latest",
+    "@stellar/stellar-sdk": "latest",
+    "axios": "latest",
+    "body-parser": "latest",
+    "cors": "latest",
+    "express": "latest",
+    "express-rate-limit": "latest",
+    "fastq": "latest",
+    "joi": "^17.11.0",
+    "joigoose": "^8.0.0",
+    "lru-cache": "latest",
+    "mongodb": "latest",
+    "mongoose": "^8.0.3",
+    "morgan": "latest",
+    "pg": "latest",
+    "pg-connection-string": "latest"
   },
   "devDependencies": {
-    "jest": "^29.1.2"
+    "jest": "latest"
   }
 }

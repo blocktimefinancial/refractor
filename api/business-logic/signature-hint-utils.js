@@ -1,4 +1,6 @@
-const {Keypair} = require('@stellar/stellar-sdk')
+// Edit: LJM - Replaced all substr calls with slice
+
+const { Keypair } = require("@stellar/stellar-sdk");
 
 /**
  * Convert the signature hint to the StrKey mask.
@@ -6,10 +8,10 @@ const {Keypair} = require('@stellar/stellar-sdk')
  * @return {string}
  */
 function hintToMask(hint) {
-    const partialPublicKey = Buffer.concat([Buffer.alloc(28), hint]),
-        hintKeypair = new Keypair({type: 'ed25519', publicKey: partialPublicKey}),
-        pk = hintKeypair.publicKey()
-    return pk.substr(0, 1) + '_'.repeat(46) + pk.substr(47, 5) + '_'.repeat(4)
+  const partialPublicKey = Buffer.concat([Buffer.alloc(28), hint]),
+    hintKeypair = new Keypair({ type: "ed25519", publicKey: partialPublicKey }),
+    pk = hintKeypair.publicKey();
+  return pk.slice(0, 1) + "_".repeat(46) + pk.slice(47, 52) + "_".repeat(4);
 }
 
 /**
@@ -18,8 +20,8 @@ function hintToMask(hint) {
  * @return {string}
  */
 function formatHint(hint) {
-    const mask = hintToMask(hint)
-    return mask.substr(0, 2) + '…' + mask.substr(46)
+  const mask = hintToMask(hint);
+  return mask.slice(0, 2) + "…" + mask.slice(46);
 }
 
 /**
@@ -29,7 +31,7 @@ function formatHint(hint) {
  * @return {boolean}
  */
 function hintMatchesKey(hint, key) {
-    return hintToMask(hint).substr(47, 5) === key.substr(47, 5)
+  return hintToMask(hint).slice(47, 52) === key.slice(47, 52);
 }
 
 /**
@@ -39,7 +41,7 @@ function hintMatchesKey(hint, key) {
  * @return {String|null}
  */
 function findKeysByHint(hint, allKeys) {
-    return allKeys.find(key => hintMatchesKey(hint, key))
+  return allKeys.find((key) => hintMatchesKey(hint, key));
 }
 
 /**
@@ -49,14 +51,16 @@ function findKeysByHint(hint, allKeys) {
  * @returns {*}
  */
 function findSignatureByKey(pubkey, allSignatures = []) {
-    const matchingSignatures = allSignatures.filter(sig => hintMatchesKey(sig.hint(), pubkey))
-    return matchingSignatures.find(sig=>Keypair.fromPublicKey(pubkey))
+  const matchingSignatures = allSignatures.filter((sig) =>
+    hintMatchesKey(sig.hint(), pubkey)
+  );
+  return matchingSignatures.find((sig) => Keypair.fromPublicKey(pubkey));
 }
 
 module.exports = {
-    hintToMask,
-    hintMatchesKey,
-    formatHint,
-    findKeysByHint,
-    findSignatureByKey
-}
+  hintToMask,
+  hintMatchesKey,
+  formatHint,
+  findKeysByHint,
+  findSignatureByKey,
+};

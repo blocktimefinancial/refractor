@@ -1,14 +1,18 @@
-const {version, name} = require('../package.json')
+// Edit: LJM - Replaced the const value in "more" with a link to the BTF configured refractor instance
+// "https://refractor.stellar.expert/"
 
-const started = new Date()
+const { version, name } = require("../package.json");
+const { serviceInfoMore } = require("../app.config.json");
+
+const started = new Date();
 
 module.exports = {
-    serviceInfo() {
-        return {
-            service: name,
-            version,
-            more: 'https://refractor.stellar.expert/',
-            started: started.toISOString()
-        }
-    }
-}
+  serviceInfo() {
+    return {
+      service: name,
+      version,
+      more: serviceInfoMore,
+      started: started.toISOString(),
+    };
+  },
+};
