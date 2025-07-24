@@ -2,7 +2,7 @@
 // "https://refractor.stellar.expert/"
 
 const { version, name } = require("../package.json");
-const { serviceInfoMore } = require("../app.config.json");
+const { serviceInfoMore } = require("../app.config");
 
 const started = new Date();
 

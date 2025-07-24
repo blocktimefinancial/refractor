@@ -10,13 +10,12 @@ const defaultCorsOptions = {
 
 const rateLimits = {
   general: rateLimit({
-    windowMs: 60 * 1000, // max 120 requests per minute
-    max: 120,
+    windowMs: 1 * 1000, // 1 second window
+    max: 100, // max 100 requests per second
   }),
   strict: rateLimit({
-    // max 10 requests per minute
-    windowMs: 60 * 1000,
-    max: 10,
+    windowMs: 1 * 1000, // 1 second window
+    max: 50, // max 50 requests per second for strict endpoints
   }),
 };
 

@@ -3,7 +3,7 @@ const FsDataProvider = require("./fs-data-provider"),
   MongooseDataProvider = require("./mongoose-data-provider"),
   MongodbFirestoreDataProvider = require("./mongodb-firestore-data-provider"),
   InMemoryDataProvider = require("./inmemory-data-provider"),
-  { storage } = require("../app.config.json");
+  { storage } = require("../app.config");
 
 class StorageLayer {
   async initDataProvider(providerName = storage) {

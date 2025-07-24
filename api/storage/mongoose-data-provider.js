@@ -19,7 +19,6 @@ class MongooseDataProvider extends DataProvider {
       retryWrites: true,
       retryReads: true,
       bufferCommands: false,
-      bufferMaxEntries: 0,
     };
 
     try {
@@ -84,9 +83,14 @@ class MongooseDataProvider extends DataProvider {
       // Validate input data
       const validatedData = this.validateTransaction(txModelData);
 
+      // Set _id to the transaction hash
+      validatedData._id = validatedData.hash;
+      // Remove the separate hash field since _id serves as hash
+      delete validatedData.hash;
+
       // Use upsert to handle existing transactions
       const result = await TxModel.findOneAndUpdate(
-        { hash: validatedData.hash },
+        { _id: validatedData._id },
         validatedData,
         {
           upsert: true,
@@ -118,14 +122,14 @@ class MongooseDataProvider extends DataProvider {
    */
   async findTransaction(hash) {
     try {
-      const transaction = await TxModel.findOne({ hash }).lean();
+      const transaction = await TxModel.findById(hash).lean();
 
       if (!transaction) {
         return null;
       }
 
-      // Convert _id to hash for backward compatibility
-      transaction.hash = transaction._id || transaction.hash;
+      // Set hash field from _id for backward compatibility
+      transaction.hash = transaction._id;
       delete transaction._id;
       delete transaction.__v;
 
@@ -145,17 +149,30 @@ class MongooseDataProvider extends DataProvider {
    */
   async updateTransaction(hash, update, expectedCurrentStatus) {
     try {
-      const filter = { hash };
+      const filter = { _id: hash }; // Use _id instead of hash for Mongoose
 
       if (expectedCurrentStatus !== undefined) {
         filter.status = expectedCurrentStatus;
       }
+
+      console.log(
+        `[DEBUG] updateTransaction - filter:`,
+        JSON.stringify(filter)
+      );
+      console.log(
+        `[DEBUG] updateTransaction - update:`,
+        JSON.stringify(update)
+      );
 
       // Add update timestamp
       update.updatedAt = new Date();
 
       const result = await TxModel.updateOne(filter, { $set: update });
 
+      console.log(
+        `[DEBUG] updateTransaction - result:`,
+        JSON.stringify(result)
+      );
       return result.matchedCount > 0;
     } catch (error) {
       console.error("Error updating transaction:", error);
@@ -172,11 +189,15 @@ class MongooseDataProvider extends DataProvider {
    * @returns {Promise<Boolean>}
    */
   async updateTxStatus(hash, newStatus, expectedCurrentStatus, error = null) {
-    const update = { status: newStatus };
+    const update = {
+      status: newStatus,
+      updatedAt: new Date(),
+    };
 
     if (error) {
       update.lastError = error.message || error.toString();
-      update.retryCount = { $inc: 1 };
+      // Fix: Use $inc operator correctly for retryCount increment
+      update.$inc = { retryCount: 1 };
     }
 
     return this.updateTransaction(hash, update, expectedCurrentStatus);

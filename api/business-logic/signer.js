@@ -91,6 +91,8 @@ class Signer {
     let txInfo = await storageLayer.dataProvider.findTransaction(this.hash);
     if (txInfo) {
       this.txInfo = txInfo; //replace tx info with info from db
+      // Ensure hash remains as string (MongoDB returns ObjectId)
+      this.txInfo.hash = this.hash;
       this.status = "unchanged";
     } else {
       this.status = "created";
@@ -124,7 +126,9 @@ class Signer {
     const { hint, signature } = rawSignature._attributes;
     //init wrapped signature object
     const signaturePair = new TxSignature();
-    signaturePair.signature = signature;
+    // Convert signature to base64 string for MongoDB storage
+    signaturePair.signature =
+      signature instanceof Buffer ? signature.toString("base64") : signature;
     //find matching signer from potential signers list
     signaturePair.key = this.potentialSigners.find(
       (key) => hintMatchesKey(hint, key) && this.verifySignature(key, signature)
@@ -173,10 +177,20 @@ class Signer {
     if (!this.txInfo.status) {
       this.txInfo.status = "pending";
     }
+    const wasReady = this.txInfo.status === "ready";
     if (this.txInfo.status === "pending" && this.isReady) {
       this.txInfo.status = "ready";
     }
     await storageLayer.dataProvider.saveTransaction(this.txInfo);
+
+    // If transaction just became ready, trigger immediate finalizer check
+    if (!wasReady && this.txInfo.status === "ready") {
+      const finalizer = require("./finalization/finalizer");
+      console.log(
+        `[DEBUG] Transaction ${this.txInfo.hash} became ready, triggering immediate finalizer check`
+      );
+      setImmediate(() => finalizer.triggerImmediateCheck());
+    }
   }
 
   /**

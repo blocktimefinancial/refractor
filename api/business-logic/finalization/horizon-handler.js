@@ -37,19 +37,57 @@ horizonQueue.on("metrics", (metrics) => {
   console.log("Horizon Queue Metrics:", {
     processed: metrics.processed,
     failed: metrics.failed,
+    retries: metrics.retries,
     throughput: metrics.throughput.toFixed(2),
     queueLength: metrics.queueLength,
+    running: metrics.running,
     concurrency: metrics.concurrency,
     successRate: (metrics.successRate * 100).toFixed(1) + "%",
+    utilization: (metrics.utilization * 100).toFixed(1) + "%",
+    avgProcessingTime: metrics.avgProcessingTime?.toFixed(0) + "ms",
   });
 });
 
 horizonQueue.on("taskFailed", ({ taskId, attempts, error }) => {
-  console.error(
-    `Horizon submission ${taskId} failed after ${attempts} attempts:`,
-    error.message
-  );
+  const errorInfo = {
+    taskId,
+    attempts,
+    errorType: error.name || "UnknownError",
+    message: error.message,
+  };
+
+  if (error.status) {
+    errorInfo.httpStatus = error.status;
+  }
+
+  if (error.status === 429) {
+    console.warn(`[WARN] Horizon rate limit failure:`, errorInfo);
+  } else {
+    console.error(`[ERROR] Horizon submission failure:`, errorInfo);
+  }
 });
+
+horizonQueue.on("taskRetry", ({ taskId, attempt, error }) => {
+  if (error.status === 429) {
+    console.warn(
+      `[WARN] Retrying rate-limited task ${taskId} (attempt ${attempt})`
+    );
+  } else {
+    console.warn(
+      `[WARN] Retrying failed task ${taskId} (attempt ${attempt}): ${error.message}`
+    );
+  }
+});
+
+horizonQueue.on(
+  "concurrencyAdjusted",
+  ({ oldConcurrency, newConcurrency, reason }) => {
+    console.log(
+      `[INFO] Horizon concurrency adjusted: ${oldConcurrency} → ${newConcurrency}`,
+      reason
+    );
+  }
+);
 
 function setSubmitTransactionCallback(callback) {
   submitTransactionWorker = callback;
@@ -66,16 +104,76 @@ async function submitTransaction(txInfo) {
     txInfo.result = result;
     return txInfo;
   } catch (error) {
-    // Enhanced error handling for Horizon-specific errors
+    // Enhanced error handling that preserves original error details
+    let enhancedError;
+
     if (error.response && error.response.status) {
-      const horizonError = new Error("Transaction submission failed");
-      horizonError.status = error.response.status;
-      if (error.response?.data?.extras) {
-        horizonError.result_codes = error.response.data.extras.result_codes;
+      // Preserve the original error structure for Horizon-specific errors
+      enhancedError = new Error(
+        `Horizon submission failed: ${error.message || "Unknown error"}`
+      );
+      enhancedError.name = "HorizonSubmissionError";
+      enhancedError.status = error.response.status;
+      enhancedError.originalError = error;
+
+      // Preserve important Horizon error details
+      if (error.response.data) {
+        enhancedError.data = error.response.data;
+        if (error.response.data.extras) {
+          enhancedError.result_codes = error.response.data.extras.result_codes;
+          enhancedError.operation_codes =
+            error.response.data.extras.operation_codes;
+        }
+        if (error.response.data.detail) {
+          enhancedError.detail = error.response.data.detail;
+        }
       }
-      throw horizonError;
+
+      // Special logging for rate limit errors
+      if (error.response.status === 429) {
+        console.warn(
+          `[WARN] Rate limit encountered for transaction ${txInfo.hash}:`,
+          {
+            status: enhancedError.status,
+            detail: enhancedError.detail,
+            retryAfter: error.response.headers?.["retry-after"],
+          }
+        );
+      } else {
+        console.error(
+          `[ERROR] Horizon submission error for transaction ${txInfo.hash}:`,
+          {
+            status: enhancedError.status,
+            detail: enhancedError.detail,
+            result_codes: enhancedError.result_codes,
+            operation_codes: enhancedError.operation_codes,
+          }
+        );
+      }
+    } else {
+      // Handle network errors and other non-HTTP errors
+      enhancedError = new Error(
+        `Transaction submission failed: ${error.message || error.toString()}`
+      );
+      enhancedError.name = "TransactionSubmissionError";
+      enhancedError.originalError = error;
+
+      // Preserve error codes for network issues
+      if (error.code) {
+        enhancedError.code = error.code;
+      }
+
+      console.error(
+        `[ERROR] Non-HTTP submission error for transaction ${txInfo.hash}:`,
+        {
+          message: enhancedError.message,
+          code: enhancedError.code,
+          originalError: error.message,
+        }
+      );
     }
-    throw error;
+
+    throw enhancedError;
   }
 }
 

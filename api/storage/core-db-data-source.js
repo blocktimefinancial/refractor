@@ -3,7 +3,7 @@
 const { Pool } = require("pg"),
   { parse: parseConnectionString } = require("pg-connection-string"),
   { Horizon, StrKey } = require("@stellar/stellar-sdk"),
-  { networks } = require("../app.config.json");
+  { networks } = require("../app.config");
 
 const pools = {};
 
@@ -39,28 +39,40 @@ async function loadAccountsInfo(network, accounts) {
   }
 
   const pool = pools[network];
+
+  // Check if we're using Horizon instead of PostgreSQL
+  if (pool instanceof Horizon.Server) {
+    console.log(
+      `Using Horizon fallback for account info (network: ${network})`
+    );
+    // For each account in the accounts array, call Horizon to get the account details
+    const accountPromises = accounts.map(async (account) => {
+      try {
+        const accountData = await pool.loadAccount(account);
+        return {
+          account_id: accountData.accountId(),
+          id: accountData.accountId(),
+          signers: accountData.signers,
+          thresholds: accountData.thresholds,
+        };
+      } catch (error) {
+        console.warn(
+          `Failed to load account ${account} from Horizon:`,
+          error.message
+        );
+        return null;
+      }
+    });
+
+    const accountResults = await Promise.all(accountPromises);
+    return accountResults.filter((account) => account !== null);
+  }
+
+  // Use PostgreSQL for core database access
   const { rows } = await pool.query(
     "select accountid, thresholds, flags, signers from accounts where accountid = ANY($1)",
     [accounts]
   );
-
-  // If the pool is an instance of a Horizon.Server, we need to handle the response differently
-  if (pool instanceof Horizon.Server) {
-    // For each account in the accounts array, call Horizon to get the account details and then wait for all the promises to resolve
-    // Push the results for each returned promise into an array to return
-    const accountPromises = accounts.map((account) =>
-      pool.loadAccount(account).catch(() => null)
-    );
-    const accountResults = await Promise.all(accountPromises);
-    return accountResults
-      .filter((account) => account !== null)
-      .map((account) => ({
-        account_id: account.accountId(),
-        id: account.accountId(),
-        signers: account.signers,
-        thresholds: account.thresholds,
-      }));
-  }
 
   return rows.map(function ({ accountid, thresholds, flags, signers }) {
     const accountSigners = [];

@@ -1,7 +1,7 @@
 // Edit LJM - Added MAINNET to the network resolver
 
 const { standardError } = require("./std-error"),
-  { networks } = require("../app.config.json");
+  { networks } = require("../app.config");
 
 function normalizeNetworkName(network) {
   switch (network) {

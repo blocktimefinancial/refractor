@@ -14,7 +14,10 @@ const txSignatureSchema = Joi.object({
     .pattern(/^G[A-Z2-7]{55}$/)
     .required()
     .description("Stellar public key (Ed25519)"),
-  signature: Joi.binary().required().description("Raw signature bytes"),
+  signature: Joi.string()
+    .base64()
+    .required()
+    .description("Base64-encoded signature bytes"),
 });
 
 // Joi schema for TxModel
@@ -29,9 +32,10 @@ const txModelSchema = Joi.object({
     .max(1)
     .required()
     .description("Network identifier (0=pubnet, 1=testnet)"),
-  xdr: Joi.binary()
+  xdr: Joi.string()
+    .base64()
     .required()
-    .description("Transaction XDR without signatures"),
+    .description("Transaction XDR without signatures (base64-encoded)"),
   signatures: Joi.array()
     .items(txSignatureSchema)
     .default([])
@@ -85,15 +89,42 @@ const txModelSchema = Joi.object({
 });
 
 // Convert Joi schemas to Mongoose schemas
-const TxSignatureMongooseSchema = joigoose.convert(txSignatureSchema);
-const TxModelMongooseSchema = joigoose.convert(txModelSchema);
+const TxSignatureMongooseSchemaDefinition = joigoose.convert(txSignatureSchema);
+const TxModelMongooseSchemaDefinition = joigoose.convert(txModelSchema);
+
+// Remove the hash field from Mongoose schema since we use _id as hash
+delete TxModelMongooseSchemaDefinition.hash;
+
+// Create actual Mongoose schemas
+const TxSignatureMongooseSchema = new mongoose.Schema(
+  TxSignatureMongooseSchemaDefinition
+);
+const TxModelMongooseSchema = new mongoose.Schema(
+  TxModelMongooseSchemaDefinition,
+  {
+    _id: false, // Disable auto-generated _id
+  }
+);
+
+// Add custom _id field using the hash
+TxModelMongooseSchema.add({
+  _id: {
+    type: String,
+    required: true,
+    validate: {
+      validator: function (v) {
+        return /^[a-f0-9]{64}$/.test(v);
+      },
+      message: "Transaction hash must be a 64-character hex string",
+    },
+  },
+});
 
 // Add custom transformations and indexes
 TxModelMongooseSchema.set("collection", "tx");
 TxModelMongooseSchema.set("timestamps", true);
 
-// Indexes for performance
-TxModelMongooseSchema.index({ hash: 1 }, { unique: true });
+// Use _id as the hash field (no separate hash index needed)
 TxModelMongooseSchema.index({ status: 1, minTime: 1 });
 TxModelMongooseSchema.index({ network: 1, status: 1 });
 TxModelMongooseSchema.index({ maxTime: 1 }, { sparse: true });

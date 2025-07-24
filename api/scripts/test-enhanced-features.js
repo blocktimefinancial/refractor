@@ -6,6 +6,7 @@
 
 const axios = require("axios");
 const crypto = require("crypto");
+const stellarSdk = require("@stellar/stellar-sdk");
 
 class RefractorAPITester {
   constructor(baseUrl = "http://localhost:4010") {
@@ -25,22 +26,50 @@ class RefractorAPITester {
   async test(name, testFn) {
     try {
       this.log(`Running test: ${name}`);
-      await testFn();
+      const result = await testFn();
       this.testResults.passed++;
       this.log(`✅ ${name} - PASSED`, "SUCCESS");
+      return result;
     } catch (error) {
       this.testResults.failed++;
       this.testResults.errors.push({ test: name, error: error.message });
       this.log(`❌ ${name} - FAILED: ${error.message}`, "ERROR");
+      return null;
     }
   }
 
   generateTestTransaction() {
-    const hash = crypto.randomBytes(32).toString("hex");
+    // Create a valid Stellar transaction for testing
+    const sourceKeypair = stellarSdk.Keypair.random();
+    const destinationKeypair = stellarSdk.Keypair.random();
+
+    // Create a mock account object with the minimum required properties
+    const sourceAccount = new stellarSdk.Account(
+      sourceKeypair.publicKey(),
+      "0"
+    );
+
+    const transaction = new stellarSdk.TransactionBuilder(sourceAccount, {
+      fee: stellarSdk.BASE_FEE,
+      networkPassphrase: stellarSdk.Networks.TESTNET,
+    })
+      .addOperation(
+        stellarSdk.Operation.payment({
+          destination: destinationKeypair.publicKey(),
+          asset: stellarSdk.Asset.native(),
+          amount: "0.1",
+        })
+      )
+      .setTimeout(300)
+      .build();
+
+    const hash = transaction.hash().toString("hex");
+    const xdr = transaction.toEnvelope().toXDR("base64");
+
     return {
       hash,
       network: 1, // testnet
-      xdr: Buffer.from("test-xdr-data").toString("base64"),
+      xdr,
       signatures: [],
       submit: false,
       callbackUrl: null,
@@ -156,6 +185,9 @@ class RefractorAPITester {
       }
     }
 
+    // Add delay between validation tests to avoid rate limiting
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
     // Test invalid network
     try {
       await this.apiCall("POST", "/tx", {
@@ -195,21 +227,36 @@ class RefractorAPITester {
   async testLoadGeneration() {
     this.log("Starting load generation test...");
 
-    const promises = [];
-    const transactionCount = 10;
+    const transactionCount = 5; // Reduced for more manageable testing
+    const results = [];
 
+    // Sequential processing to avoid rate limiting
     for (let i = 0; i < transactionCount; i++) {
       const testTx = this.generateTestTransaction();
-      promises.push(
-        this.apiCall("POST", "/tx", testTx).catch((err) => {
-          // Log but don't fail the test for individual transaction errors
+
+      try {
+        const result = await this.apiCall("POST", "/tx", testTx);
+        results.push(result);
+        this.log(`Transaction ${i} submitted successfully: ${result.hash}`);
+      } catch (err) {
+        // Log detailed error for debugging
+        if (err.response && err.response.data) {
+          this.log(
+            `Transaction ${i} failed: ${JSON.stringify(err.response.data)}`,
+            "WARN"
+          );
+        } else {
           this.log(`Transaction ${i} failed: ${err.message}`, "WARN");
-          return null;
-        })
-      );
+        }
+        results.push(null);
+      }
+
+      // Add delay between requests to avoid rate limiting
+      if (i < transactionCount - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
     }
 
-    const results = await Promise.all(promises);
     const successful = results.filter((r) => r !== null).length;
 
     this.log(

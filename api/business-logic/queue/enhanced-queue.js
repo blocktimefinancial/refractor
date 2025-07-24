@@ -79,30 +79,69 @@ class EnhancedQueue extends EventEmitter {
             processingTime,
             result,
           });
-          callback(null, result);
+          if (callback) {
+            callback(null, result);
+          }
         } catch (error) {
+          console.error(`[ERROR] Task ${taskId} failed:`, error);
           lastError = error;
           const processingTime = Date.now() - startTime;
 
           this.emit("taskError", { taskId, attempt, error, processingTime });
 
           if (attempt < this.options.retryAttempts && this.shouldRetry(error)) {
+            console.warn(
+              `[WARN] Retrying task ${taskId} (attempt ${attempt}/${this.options.retryAttempts})`
+            );
             this.stats.retries++;
             this.emit("taskRetry", { taskId, attempt: attempt + 1, error });
 
-            // Exponential backoff with jitter
-            const delay =
-              this.options.retryDelay * Math.pow(2, attempt - 1) +
-              Math.random() * 1000;
+            // Special handling for rate limit errors (429)
+            let delay;
+            if (error.status === 429) {
+              // For rate limits, use longer delays with more backoff
+              delay = Math.min(
+                this.options.retryDelay * Math.pow(3, attempt - 1) +
+                  Math.random() * 2000,
+                30000 // Cap at 30 seconds
+              );
+              console.warn(
+                `[WARN] Rate limit detected for task ${taskId}, backing off for ${delay}ms`
+              );
+
+              // Temporarily reduce concurrency to ease pressure
+              if (this.queue.concurrency > this.options.minConcurrency) {
+                const newConcurrency = Math.max(
+                  Math.floor(this.queue.concurrency * 0.7),
+                  this.options.minConcurrency
+                );
+                console.warn(
+                  `[WARN] Reducing concurrency from ${this.queue.concurrency} to ${newConcurrency} due to rate limiting`
+                );
+                this.queue.concurrency = newConcurrency;
+              }
+            } else {
+              // Standard exponential backoff with jitter for other errors
+              delay =
+                this.options.retryDelay * Math.pow(2, attempt - 1) +
+                Math.random() * 1000;
+            }
+
             setTimeout(attemptTask, delay);
           } else {
+            console.error(
+              `[ERROR] Task ${taskId} failed after ${attempt} attempts:`,
+              lastError.message || lastError.toString()
+            );
             this.updateStats(processingTime, false);
             this.emit("taskFailed", {
               taskId,
               attempts: attempt,
               error: lastError,
             });
-            callback(lastError);
+            if (callback) {
+              callback(lastError);
+            }
           }
         }
       };
@@ -115,16 +154,44 @@ class EnhancedQueue extends EventEmitter {
    * Determine if an error should trigger a retry
    */
   shouldRetry(error) {
-    // Don't retry validation errors or client errors (4xx)
-    if (
-      error.name === "ValidationError" ||
-      (error.status && error.status >= 400 && error.status < 500)
-    ) {
+    // Don't retry validation errors or permanent client errors (4xx except 429)
+    if (error.name === "ValidationError") {
       return false;
     }
 
-    // Retry network errors, timeouts, and server errors
-    return true;
+    // Handle HTTP status codes
+    if (error.status) {
+      // Always retry rate limit errors (429)
+      if (error.status === 429) {
+        return true;
+      }
+
+      // Don't retry other client errors (400-499 except 429)
+      if (error.status >= 400 && error.status < 500) {
+        return false;
+      }
+
+      // Retry server errors (5xx)
+      if (error.status >= 500) {
+        return true;
+      }
+    }
+
+    // Retry network errors, timeouts, and connection issues
+    if (
+      error.code === "ECONNRESET" ||
+      error.code === "ENOTFOUND" ||
+      error.code === "ECONNREFUSED" ||
+      error.code === "ETIMEDOUT" ||
+      error.message?.includes("timeout") ||
+      error.message?.includes("network") ||
+      error.message?.includes("connection")
+    ) {
+      return true;
+    }
+
+    // Default to not retrying unknown errors
+    return false;
   }
 
   /**
@@ -185,36 +252,70 @@ class EnhancedQueue extends EventEmitter {
     const avgProcessingTime = this.stats.avgProcessingTime;
     const successRate =
       this.stats.processed / (this.stats.processed + this.stats.failed) || 1;
+    const errorRate =
+      this.stats.failed / (this.stats.processed + this.stats.failed) || 0;
 
     let newConcurrency = currentConcurrency;
 
-    // Increase concurrency if queue is building up and success rate is good
-    if (
-      queueLength > currentConcurrency * 2 &&
-      successRate > 0.95 &&
-      avgProcessingTime < 5000
-    ) {
-      newConcurrency = Math.min(
-        currentConcurrency + 1,
-        this.options.maxConcurrency
-      );
-    }
-    // Decrease concurrency if processing is slow or error rate is high
-    else if (avgProcessingTime > 10000 || successRate < 0.9) {
+    // If we're seeing high error rates, be more conservative
+    if (errorRate > 0.1) {
       newConcurrency = Math.max(
-        currentConcurrency - 1,
+        Math.floor(currentConcurrency * 0.8),
         this.options.minConcurrency
       );
     }
-    // Decrease concurrency if queue is empty for extended period
-    else if (
-      queueLength === 0 &&
-      this.queue.running() < currentConcurrency / 2
-    ) {
-      newConcurrency = Math.max(
-        currentConcurrency - 1,
-        this.options.minConcurrency
-      );
+    // During bulk operations (large queue), be more conservative with scaling
+    else if (queueLength > 50) {
+      // Only increase concurrency if success rate is very high and processing is fast
+      if (
+        queueLength > currentConcurrency * 3 &&
+        successRate > 0.98 &&
+        avgProcessingTime < 3000 &&
+        currentConcurrency < this.options.maxConcurrency * 0.7 // Cap at 70% of max during bulk ops
+      ) {
+        newConcurrency = Math.min(
+          currentConcurrency + 1,
+          Math.floor(this.options.maxConcurrency * 0.7)
+        );
+      }
+      // Decrease if processing is slow or error rate is elevated
+      else if (avgProcessingTime > 8000 || successRate < 0.95) {
+        newConcurrency = Math.max(
+          currentConcurrency - 1,
+          this.options.minConcurrency
+        );
+      }
+    }
+    // Normal operations - original logic but more conservative
+    else {
+      // Increase concurrency if queue is building up and success rate is excellent
+      if (
+        queueLength > currentConcurrency * 2 &&
+        successRate > 0.98 &&
+        avgProcessingTime < 4000
+      ) {
+        newConcurrency = Math.min(
+          currentConcurrency + 1,
+          this.options.maxConcurrency
+        );
+      }
+      // Decrease concurrency if processing is slow or error rate is elevated
+      else if (avgProcessingTime > 10000 || successRate < 0.9) {
+        newConcurrency = Math.max(
+          currentConcurrency - 1,
+          this.options.minConcurrency
+        );
+      }
+      // Decrease concurrency if queue is empty for extended period
+      else if (
+        queueLength === 0 &&
+        this.queue.running() < currentConcurrency / 2
+      ) {
+        newConcurrency = Math.max(
+          currentConcurrency - 1,
+          this.options.minConcurrency
+        );
+      }
     }
 
     if (newConcurrency !== currentConcurrency) {
@@ -222,7 +323,7 @@ class EnhancedQueue extends EventEmitter {
       this.emit("concurrencyAdjusted", {
         oldConcurrency: currentConcurrency,
         newConcurrency,
-        reason: { queueLength, avgProcessingTime, successRate },
+        reason: { queueLength, avgProcessingTime, successRate, errorRate },
       });
     }
   }

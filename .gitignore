@@ -41,3 +41,6 @@ pnpm-lock.yaml
 
 # config API files
 app.config.json
+
+# Environment variables
+.env

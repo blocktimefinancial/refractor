@@ -1,0 +1,574 @@
+#!/usr/bin/env node
+
+/**
+ * Test script for large transactions with multiple payment operations
+ * Creates 10 transactions, each with 100 payment operations
+ */
+
+const axios = require("axios");
+const stellarSdk = require("@stellar/stellar-sdk");
+
+class LargeTransactionTester {
+  constructor(baseUrl = "http://localhost:4010", options = {}) {
+    this.baseUrl = baseUrl;
+    this.options = {
+      submit: options.submit || false,
+      waitForProcessing: options.waitForProcessing || false,
+      maxWaitTime: options.maxWaitTime || 300000, // 5 minutes default
+      ...options,
+    };
+    this.testResults = {
+      successful: 0,
+      failed: 0,
+      errors: [],
+      totalOperations: 0,
+      averageResponseTime: 0,
+      submitted: 0,
+      processed: 0,
+    };
+  }
+
+  log(message, level = "INFO") {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ${level}: ${message}`);
+  }
+
+  /**
+   * Generate a transaction with 100 payment operations
+   */
+  generateLargeTransaction(transactionIndex) {
+    const sourceKeypair = stellarSdk.Keypair.random();
+    const sourceAccount = new stellarSdk.Account(
+      sourceKeypair.publicKey(),
+      "0"
+    );
+
+    // Create transaction builder
+    const transactionBuilder = new stellarSdk.TransactionBuilder(
+      sourceAccount,
+      {
+        fee: stellarSdk.BASE_FEE,
+        networkPassphrase: stellarSdk.Networks.TESTNET,
+      }
+    );
+
+    // Add 100 payment operations
+    const destinations = [];
+    for (let i = 0; i < 100; i++) {
+      const destinationKeypair = stellarSdk.Keypair.random();
+      destinations.push(destinationKeypair.publicKey());
+
+      transactionBuilder.addOperation(
+        stellarSdk.Operation.payment({
+          destination: destinationKeypair.publicKey(),
+          asset: stellarSdk.Asset.native(),
+          amount: (0.1 + i * 0.001).toFixed(3), // Varying amounts: 0.100, 0.101, 0.102, etc.
+        })
+      );
+    }
+
+    // Build the transaction
+    const transaction = transactionBuilder.setTimeout(300).build();
+
+    // Get hash and XDR from unsigned transaction first
+    const hash = transaction.hash().toString("hex");
+    const unsignedXDR = transaction.toEnvelope().toXDR("base64");
+
+    // Sign the transaction if we plan to submit it and get signed XDR
+    let signatures = [];
+    let xdr = unsignedXDR; // Use unsigned XDR by default
+
+    if (this.options.submit) {
+      transaction.sign(sourceKeypair);
+
+      // Extract the signature from the signed transaction
+      const envelope = transaction.toEnvelope();
+      if (envelope.v1 && envelope.v1().signatures().length > 0) {
+        const signature = envelope.v1().signatures()[0];
+        signatures = [
+          {
+            key: sourceKeypair.publicKey(),
+            signature: signature.signature().toString("base64"),
+          },
+        ];
+        // Use signed XDR when submitting
+        xdr = transaction.toEnvelope().toXDR("base64");
+      }
+    }
+
+    this.log(
+      `Generated transaction ${transactionIndex + 1} with 100 operations${
+        this.options.submit ? " (signed)" : ""
+      }`
+    );
+    this.log(`  Hash: ${hash}`);
+    this.log(`  XDR length: ${xdr.length} characters`);
+    this.log(`  First destination: ${destinations[0]}`);
+    this.log(`  Last destination: ${destinations[99]}`);
+    if (this.options.submit && signatures.length > 0) {
+      this.log(`  Signature added for: ${signatures[0].key}`);
+    }
+
+    return {
+      hash,
+      network: 1, // testnet
+      xdr,
+      signatures,
+      submit: this.options.submit,
+      callbackUrl: null,
+      desiredSigners: [],
+      minTime: 0,
+      maxTime: Math.floor(Date.now() / 1000) + 3600, // 1 hour from now
+      operationCount: 100,
+      destinations,
+      sourceKeypair: this.options.submit ? sourceKeypair : null, // Keep keypair for signing if needed
+    };
+  }
+
+  /**
+   * Submit a transaction to the API
+   */
+  async submitTransaction(transaction, index) {
+    const startTime = Date.now();
+
+    try {
+      this.log(`Submitting transaction ${index + 1}...${transaction.hash}`);
+
+      const response = await axios.post(`${this.baseUrl}/tx`, transaction, {
+        headers: { "Content-Type": "application/json" },
+        timeout: 30000, // 30 second timeout for large transactions
+      });
+
+      const duration = Date.now() - startTime;
+
+      if (response.data.hash !== transaction.hash) {
+        throw new Error("Response hash doesn't match submitted hash");
+      }
+
+      this.log(
+        `✅ Transaction ${index + 1} submitted successfully (${duration}ms)`
+      );
+      this.log(`  Response: ${JSON.stringify(response.data)}`);
+
+      return {
+        success: true,
+        duration,
+        hash: response.data.hash,
+        operationCount: transaction.operationCount,
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+
+      this.log(`❌ Transaction ${index + 1} failed (${duration}ms)`, "ERROR");
+
+      if (error.response) {
+        this.log(`  Status: ${error.response.status}`, "ERROR");
+        this.log(`  Error: ${JSON.stringify(error.response.data)}`, "ERROR");
+      } else {
+        this.log(`  Error: ${error.message}`, "ERROR");
+      }
+
+      return {
+        success: false,
+        duration,
+        error: error.response?.data || error.message,
+        operationCount: transaction.operationCount,
+      };
+    }
+  }
+
+  /**
+   * Verify a transaction was stored correctly
+   */
+  async verifyTransaction(hash, index) {
+    try {
+      this.log(`Verifying transaction ${index + 1}: ${hash}`);
+
+      const response = await axios.get(`${this.baseUrl}/tx/${hash}`, {
+        timeout: 10000,
+      });
+
+      if (response.data.hash !== hash) {
+        throw new Error("Retrieved hash doesn't match requested hash");
+      }
+
+      this.log(`✅ Transaction ${index + 1} verified successfully`);
+      this.log(`  Status: ${response.data.status}`);
+      this.log(`  Network: ${response.data.network}`);
+
+      return true;
+    } catch (error) {
+      this.log(`❌ Transaction ${index + 1} verification failed`, "ERROR");
+
+      if (error.response) {
+        this.log(`  Status: ${error.response.status}`, "ERROR");
+        this.log(`  Error: ${JSON.stringify(error.response.data)}`, "ERROR");
+      } else {
+        this.log(`  Error: ${error.message}`, "ERROR");
+      }
+
+      return false;
+    }
+  }
+
+  /**
+   * Wait for transaction processing and check if it was submitted to Horizon
+   */
+  async waitForProcessing(hash, index) {
+    if (!this.options.waitForProcessing) {
+      return { processed: false, submitted: false };
+    }
+
+    this.log(`⏳ Waiting for transaction ${index + 1} processing...`);
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < this.options.maxWaitTime) {
+      try {
+        const response = await axios.get(`${this.baseUrl}/tx/${hash}`, {
+          timeout: 10000,
+        });
+
+        const status = response.data.status;
+        const submitted = response.data.submitted;
+
+        if (status === "processed") {
+          this.log(`✅ Transaction ${index + 1} processed successfully`);
+          if (submitted) {
+            this.log(
+              `🚀 Transaction ${index + 1} submitted to Horizon at ${new Date(
+                submitted * 1000
+              ).toISOString()}`
+            );
+            return { processed: true, submitted: true };
+          } else {
+            return { processed: true, submitted: false };
+          }
+        } else if (status === "failed") {
+          this.log(`❌ Transaction ${index + 1} failed processing`);
+          return { processed: false, submitted: false, failed: true };
+        }
+
+        // Wait 2 seconds before checking again
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      } catch (error) {
+        this.log(
+          `⚠️  Error checking transaction ${index + 1} status: ${error.message}`
+        );
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
+
+    this.log(`⚠️  Timeout waiting for transaction ${index + 1} processing`);
+    return { processed: false, submitted: false, timeout: true };
+  }
+
+  /**
+   * Run the large transaction test
+   */
+  async runTest() {
+    const submitText = this.options.submit
+      ? "WITH HORIZON SUBMISSION"
+      : "WITHOUT SUBMISSION";
+    this.log(`🚀 Starting Large Transaction Test ${submitText}`);
+    this.log("Creating 10 transactions with 100 payment operations each");
+    if (this.options.submit) {
+      this.log(
+        "⚠️  NOTE: Transactions will be signed and submitted to Horizon testnet"
+      );
+      if (this.options.waitForProcessing) {
+        this.log(
+          "⏳ Will wait for transaction processing and Horizon submission"
+        );
+      }
+    }
+    this.log(
+      "================================================================================"
+    );
+
+    const transactions = [];
+    const results = [];
+    const startTime = Date.now();
+
+    // Generate all transactions first
+    this.log("\n📝 Generating transactions...");
+    for (let i = 0; i < 10; i++) {
+      const transaction = this.generateLargeTransaction(i);
+      transactions.push(transaction);
+      this.testResults.totalOperations += transaction.operationCount;
+    }
+
+    this.log(`\n📤 Submitting ${transactions.length} transactions...`);
+
+    // Submit transactions sequentially to avoid overwhelming the API
+    for (let i = 0; i < transactions.length; i++) {
+      const result = await this.submitTransaction(transactions[i], i);
+      results.push(result);
+
+      if (result.success) {
+        this.testResults.successful++;
+
+        // If we're submitting to Horizon, wait for processing
+        if (this.options.submit && this.options.waitForProcessing) {
+          const processingResult = await this.waitForProcessing(result.hash, i);
+          if (processingResult.processed) {
+            this.testResults.processed++;
+          }
+          if (processingResult.submitted) {
+            this.testResults.submitted++;
+          }
+        }
+      } else {
+        this.testResults.failed++;
+        this.testResults.errors.push({
+          transaction: i + 1,
+          hash: transactions[i].hash,
+          error: result.error,
+        });
+      }
+
+      // Add delay between submissions for large transactions
+      if (i < transactions.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+
+    // Verify successful transactions (only if not waiting for processing already)
+    if (!this.options.waitForProcessing) {
+      this.log(`\n🔍 Verifying submitted transactions...`);
+      const successfulResults = results.filter((r) => r.success);
+
+      for (let i = 0; i < successfulResults.length; i++) {
+        const result = successfulResults[i];
+        const originalIndex = results.findIndex((r) => r === result);
+        await this.verifyTransaction(result.hash, originalIndex);
+
+        // Add delay between verifications
+        if (i < successfulResults.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+    }
+
+    // Calculate statistics
+    const totalDuration = Date.now() - startTime;
+    const responseTimes = results.map((r) => r.duration);
+    this.testResults.averageResponseTime =
+      responseTimes.reduce((sum, time) => sum + time, 0) / responseTimes.length;
+
+    // Print results
+    this.printResults(totalDuration);
+  }
+
+  /**
+   * Print test results summary
+   */
+  printResults(totalDuration) {
+    this.log(
+      "\n" +
+        "================================================================================"
+    );
+    this.log("📊 TEST RESULTS SUMMARY");
+    this.log(
+      "================================================================================"
+    );
+
+    this.log(`Total Transactions: 10`);
+    this.log(`Total Payment Operations: ${this.testResults.totalOperations}`);
+    this.log(`Successful: ${this.testResults.successful}`);
+    this.log(`Failed: ${this.testResults.failed}`);
+
+    if (this.options.submit && this.options.waitForProcessing) {
+      this.log(`Processed: ${this.testResults.processed}`);
+      this.log(`Submitted to Horizon: ${this.testResults.submitted}`);
+    }
+
+    this.log(
+      `Success Rate: ${((this.testResults.successful / 10) * 100).toFixed(1)}%`
+    );
+
+    if (this.options.submit && this.options.waitForProcessing) {
+      this.log(
+        `Processing Rate: ${(
+          (this.testResults.processed / this.testResults.successful) *
+          100
+        ).toFixed(1)}%`
+      );
+      this.log(
+        `Submission Rate: ${(
+          (this.testResults.submitted / this.testResults.successful) *
+          100
+        ).toFixed(1)}%`
+      );
+    }
+
+    this.log(
+      `Average Response Time: ${this.testResults.averageResponseTime.toFixed(
+        0
+      )}ms`
+    );
+    this.log(`Total Test Duration: ${(totalDuration / 1000).toFixed(1)}s`);
+
+    if (this.testResults.failed > 0) {
+      this.log("\n❌ FAILED TRANSACTIONS:");
+      this.testResults.errors.forEach((error, index) => {
+        this.log(
+          `  ${index + 1}. Transaction ${error.transaction}: ${error.hash}`
+        );
+        this.log(`     Error: ${JSON.stringify(error.error)}`);
+      });
+    }
+
+    if (this.testResults.successful === 10) {
+      if (this.options.submit && this.options.waitForProcessing) {
+        if (this.testResults.submitted === this.testResults.successful) {
+          this.log(
+            "\n🎉 ALL TESTS PASSED! Large transactions successfully submitted to Horizon!"
+          );
+        } else {
+          this.log(
+            `\n⚠️  PARTIAL SUCCESS: ${this.testResults.successful}/10 submitted to API, ${this.testResults.submitted}/10 submitted to Horizon.`
+          );
+        }
+      } else {
+        this.log(
+          "\n🎉 ALL TESTS PASSED! Large transaction processing working correctly."
+        );
+      }
+    } else if (this.testResults.successful > 0) {
+      this.log(
+        `\n⚠️  PARTIAL SUCCESS: ${this.testResults.successful}/10 transactions processed.`
+      );
+    } else {
+      this.log("\n💥 ALL TESTS FAILED! Check API configuration and logs.");
+    }
+  }
+
+  /**
+   * Test API health before running large transaction test
+   */
+  async testApiHealth() {
+    try {
+      this.log("🏥 Checking API health...");
+      const response = await axios.get(`${this.baseUrl}/monitoring/health`, {
+        timeout: 5000,
+      });
+
+      if (response.data.status === "healthy") {
+        this.log("✅ API is healthy and ready for testing");
+        return true;
+      } else {
+        this.log("❌ API is not healthy", "ERROR");
+        this.log(`Status: ${response.data.status}`, "ERROR");
+        return false;
+      }
+    } catch (error) {
+      this.log("❌ Failed to check API health", "ERROR");
+      this.log(`Error: ${error.message}`, "ERROR");
+      return false;
+    }
+  }
+
+  /**
+   * Main test execution
+   */
+  async execute() {
+    try {
+      // Check API health first
+      const isHealthy = await this.testApiHealth();
+      if (!isHealthy) {
+        this.log("Aborting test due to API health issues", "ERROR");
+        process.exit(1);
+      }
+
+      // Run the main test
+      await this.runTest();
+
+      // Exit with appropriate code
+      process.exit(this.testResults.failed > 0 ? 1 : 0);
+    } catch (error) {
+      this.log(`💥 Test execution failed: ${error.message}`, "ERROR");
+      console.error(error);
+      process.exit(1);
+    }
+  }
+}
+
+// Command line execution
+if (require.main === module) {
+  // Parse command line arguments
+  const args = process.argv.slice(2);
+  let baseUrl = "http://localhost:4010";
+  let submit = false;
+  let waitForProcessing = false;
+  let maxWaitTime = 300000; // 5 minutes
+
+  // Parse arguments
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+
+    if (arg === "--submit" || arg === "submit") {
+      submit = true;
+      waitForProcessing = true; // Automatically wait for processing when submitting
+    } else if (arg === "--no-wait") {
+      waitForProcessing = false;
+    } else if (arg === "--wait-time" && i + 1 < args.length) {
+      maxWaitTime = parseInt(args[i + 1]) * 1000; // Convert seconds to milliseconds
+      i++; // Skip next argument
+    } else if (arg === "--help" || arg === "-h") {
+      console.log(`
+🧪 Large Transaction Tester
+
+Tests the Refractor API with 10 large transactions containing 100 payment operations each.
+
+Usage:
+  node test-large-transactions.js [URL] [OPTIONS]
+
+Arguments:
+  URL                    API base URL (default: http://localhost:4010)
+
+Options:
+  --submit, submit       Sign and submit transactions to Horizon testnet
+  --no-wait             Don't wait for transaction processing (only with --submit)
+  --wait-time SECONDS   Maximum time to wait for processing (default: 300s)
+  --help, -h            Show this help message
+
+Examples:
+  node test-large-transactions.js
+  node test-large-transactions.js http://localhost:4010
+  node test-large-transactions.js --submit
+  node test-large-transactions.js http://localhost:4010 --submit
+  node test-large-transactions.js --submit --wait-time 600
+
+Note: When using --submit, transactions will be signed and submitted to Stellar testnet.
+This requires the transactions to be valid and may result in actual blockchain operations.
+      `);
+      process.exit(0);
+    } else if (!arg.startsWith("--") && arg.includes("://")) {
+      baseUrl = arg;
+    }
+  }
+
+  console.log("🧪 Large Transaction Tester");
+  console.log(`API URL: ${baseUrl}`);
+  console.log(`Submit to Horizon: ${submit ? "YES" : "NO"}`);
+  if (submit) {
+    console.log(`Wait for processing: ${waitForProcessing ? "YES" : "NO"}`);
+    if (waitForProcessing) {
+      console.log(`Max wait time: ${maxWaitTime / 1000}s`);
+    }
+  }
+  console.log(
+    `Target: 10 transactions × 100 operations = 1000 total operations\n`
+  );
+
+  const options = {
+    submit,
+    waitForProcessing,
+    maxWaitTime,
+  };
+
+  const tester = new LargeTransactionTester(baseUrl, options);
+  tester.execute();
+}
+
+module.exports = LargeTransactionTester;
