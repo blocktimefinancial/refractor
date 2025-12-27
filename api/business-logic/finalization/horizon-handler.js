@@ -22,8 +22,11 @@ let submitTransactionWorker = function (txInfo) {
   );
 };
 
+// Wrapper function that calls through the variable so setSubmitTransactionCallback works
+const submitTransactionWrapper = (txInfo) => submitTransactionWorker(txInfo);
+
 // Enhanced queue for Horizon submissions with retry logic and monitoring
-const horizonQueue = new EnhancedQueue(submitTransactionWorker, {
+const horizonQueue = new EnhancedQueue(submitTransactionWrapper, {
   concurrency: config.horizonConcurrency || 10,
   maxConcurrency: config.maxHorizonConcurrency || 20,
   minConcurrency: 1,

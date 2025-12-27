@@ -8,6 +8,9 @@ module.exports = {
   // Automatically clear mock calls and instances between every test
   clearMocks: true,
 
+  // Force Jest to exit after all tests complete (handles async cleanup issues)
+  forceExit: true,
+
   // Indicates whether the coverage information should be collected while executing the test
   // collectCoverage: false,
 
