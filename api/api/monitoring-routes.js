@@ -1,8 +1,29 @@
 const express = require("express");
 const finalizer = require("../business-logic/finalization/finalizer");
 const storageLayer = require("../storage/storage-layer");
+const { requireAdminAuth } = require("../middleware/auth");
+const { getRequestLogger } = require("../middleware/request-id");
+const {
+  getBlacklist,
+  addToBlacklist,
+  removeFromBlacklist,
+  reloadBlacklist,
+} = require("../middleware/cors");
+const logger = require("../utils/logger").forComponent("monitoring");
 
 const router = express.Router();
+
+// Helper to get request-scoped logger or fallback to component logger
+const getLogger = (req) => {
+  const reqLogger = getRequestLogger(req);
+  // Add component context to request logger
+  return reqLogger.child
+    ? reqLogger.child({ component: "monitoring" })
+    : logger;
+};
+
+// Apply admin authentication to all write operations (POST routes)
+// Read-only endpoints (GET) remain publicly accessible for monitoring tools
 
 /**
  * Get queue metrics and status
@@ -27,7 +48,7 @@ router.get("/metrics", async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Error getting metrics:", error);
+    getLogger(req).error("Error getting metrics", { error: error.message });
     res.status(500).json({ error: "Failed to get metrics" });
   }
 });
@@ -38,17 +59,35 @@ router.get("/metrics", async (req, res) => {
 router.get("/health", async (req, res) => {
   try {
     const status = finalizer.getQueueStatus();
+
+    // Check actual database connectivity
+    let dbHealth = {
+      connected: false,
+      latencyMs: 0,
+      error: "No data provider",
+    };
+    if (
+      storageLayer.dataProvider &&
+      typeof storageLayer.dataProvider.checkHealth === "function"
+    ) {
+      dbHealth = await storageLayer.dataProvider.checkHealth();
+    }
+
     const isHealthy =
-      !status.paused && status.concurrency > 0 && storageLayer.dataProvider;
+      !status.paused && status.concurrency > 0 && dbHealth.connected;
 
     res.status(isHealthy ? 200 : 503).json({
       status: isHealthy ? "healthy" : "unhealthy",
       queue: status,
-      database: !!storageLayer.dataProvider,
+      database: {
+        connected: dbHealth.connected,
+        latencyMs: dbHealth.latencyMs,
+        ...(dbHealth.error && { error: dbHealth.error }),
+      },
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Error in health check:", error);
+    getLogger(req).error("Health check error", { error: error.message });
     res.status(503).json({
       status: "unhealthy",
       error: error.message,
@@ -59,8 +98,9 @@ router.get("/health", async (req, res) => {
 
 /**
  * Pause queue processing
+ * @security Requires admin API key
  */
-router.post("/queue/pause", (req, res) => {
+router.post("/queue/pause", requireAdminAuth(), (req, res) => {
   try {
     finalizer.finalizerQueue.pause();
     res.json({ message: "Queue paused", status: finalizer.getQueueStatus() });
@@ -71,8 +111,9 @@ router.post("/queue/pause", (req, res) => {
 
 /**
  * Resume queue processing
+ * @security Requires admin API key
  */
-router.post("/queue/resume", (req, res) => {
+router.post("/queue/resume", requireAdminAuth(), (req, res) => {
   try {
     finalizer.finalizerQueue.resume();
     res.json({ message: "Queue resumed", status: finalizer.getQueueStatus() });
@@ -83,8 +124,9 @@ router.post("/queue/resume", (req, res) => {
 
 /**
  * Adjust queue concurrency
+ * @security Requires admin API key
  */
-router.post("/queue/concurrency", (req, res) => {
+router.post("/queue/concurrency", requireAdminAuth(), (req, res) => {
   try {
     const { concurrency } = req.body;
 
@@ -107,8 +149,9 @@ router.post("/queue/concurrency", (req, res) => {
 
 /**
  * Clean up expired transactions
+ * @security Requires admin API key
  */
-router.post("/cleanup/expired", async (req, res) => {
+router.post("/cleanup/expired", requireAdminAuth(), async (req, res) => {
   try {
     if (!storageLayer.dataProvider.cleanupExpiredTransactions) {
       return res
@@ -124,8 +167,116 @@ router.post("/cleanup/expired", async (req, res) => {
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Error during cleanup:", error);
+    getLogger(req).error("Cleanup error", { error: error.message });
     res.status(500).json({ error: "Cleanup failed" });
+  }
+});
+
+// =============================================================================
+// CORS Blacklist Management
+// =============================================================================
+
+/**
+ * Get current CORS blacklist
+ * @security Requires admin API key
+ */
+router.get("/cors/blacklist", requireAdminAuth(), (req, res) => {
+  try {
+    const blacklist = getBlacklist();
+    res.json({
+      blacklist,
+      count: blacklist.length,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    getLogger(req).error("Failed to get CORS blacklist", {
+      error: error.message,
+    });
+    res.status(500).json({ error: "Failed to get blacklist" });
+  }
+});
+
+/**
+ * Add origin to CORS blacklist
+ * @security Requires admin API key
+ * @body {origin: string} - Origin to block
+ */
+router.post("/cors/blacklist", requireAdminAuth(), (req, res) => {
+  try {
+    const { origin } = req.body;
+
+    if (!origin || typeof origin !== "string") {
+      return res.status(400).json({ error: "Origin is required" });
+    }
+
+    addToBlacklist(origin);
+
+    res.json({
+      message: "Origin added to blacklist",
+      origin,
+      blacklist: getBlacklist(),
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    getLogger(req).error("Failed to add to CORS blacklist", {
+      error: error.message,
+    });
+    res.status(500).json({ error: "Failed to add to blacklist" });
+  }
+});
+
+/**
+ * Remove origin from CORS blacklist
+ * @security Requires admin API key
+ * @body {origin: string} - Origin to unblock
+ */
+router.delete("/cors/blacklist", requireAdminAuth(), (req, res) => {
+  try {
+    const { origin } = req.body;
+
+    if (!origin || typeof origin !== "string") {
+      return res.status(400).json({ error: "Origin is required" });
+    }
+
+    const removed = removeFromBlacklist(origin);
+
+    if (!removed) {
+      return res.status(404).json({ error: "Origin not found in blacklist" });
+    }
+
+    res.json({
+      message: "Origin removed from blacklist",
+      origin,
+      blacklist: getBlacklist(),
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    getLogger(req).error("Failed to remove from CORS blacklist", {
+      error: error.message,
+    });
+    res.status(500).json({ error: "Failed to remove from blacklist" });
+  }
+});
+
+/**
+ * Reload CORS blacklist from environment/config
+ * @security Requires admin API key
+ */
+router.post("/cors/blacklist/reload", requireAdminAuth(), (req, res) => {
+  try {
+    const count = reloadBlacklist();
+
+    res.json({
+      message: "Blacklist reloaded from configuration",
+      count,
+      blacklist: getBlacklist(),
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    getLogger(req).error("Failed to reload CORS blacklist", {
+      error: error.message,
+    });
+    res.status(500).json({ error: "Failed to reload blacklist" });
   }
 });
 

@@ -199,10 +199,101 @@ TxModelMongooseSchema.statics.findExpired = function () {
   });
 };
 
+// ============================================================================
+// API Request Validation Schemas (subset of full model for client submissions)
+// ============================================================================
+
+/**
+ * Schema for transaction submission requests
+ * Only includes fields that clients can submit (excludes internal fields)
+ */
+const txSubmissionSchema = Joi.object({
+  xdr: Joi.string().required().description("Transaction XDR (base64-encoded)"),
+  network: Joi.alternatives()
+    .try(
+      Joi.number().integer().min(0).max(2),
+      Joi.string().valid(
+        "public",
+        "testnet",
+        "futurenet",
+        "PUBLIC",
+        "TESTNET",
+        "FUTURENET"
+      )
+    )
+    .required()
+    .description(
+      "Network identifier (0=pubnet, 1=testnet, 2=futurenet or string name)"
+    ),
+  signatures: Joi.array()
+    .items(txSignatureSchema)
+    .default([])
+    .description("Applied transaction signatures"),
+  submit: Joi.boolean()
+    .default(false)
+    .description("Submit transaction to network once fully signed"),
+  callbackUrl: Joi.string()
+    .uri()
+    .allow(null, "")
+    .description("Callback URL for transaction notification"),
+  desiredSigners: Joi.array()
+    .items(Joi.string().pattern(/^G[A-Z2-7]{55}$/))
+    .default([])
+    .description("List of signers requested by transaction author"),
+  minTime: Joi.number()
+    .integer()
+    .min(0)
+    .default(0)
+    .description(
+      "Point in time when transaction becomes valid (UNIX timestamp)"
+    ),
+  maxTime: Joi.number()
+    .integer()
+    .min(0)
+    .allow(null)
+    .description("Transaction expiration date (UNIX timestamp)"),
+});
+
+/**
+ * Schema for transaction hash parameter validation
+ */
+const txHashSchema = Joi.object({
+  hash: Joi.string()
+    .pattern(/^[a-f0-9]{64}$/)
+    .required()
+    .description("Transaction hash (SHA-256, 64 hex characters)"),
+});
+
+/**
+ * Schema for monitoring query parameters
+ */
+const monitoringQuerySchema = Joi.object({
+  limit: Joi.number()
+    .integer()
+    .min(1)
+    .max(1000)
+    .default(100)
+    .description("Maximum number of results to return"),
+  status: Joi.string()
+    .valid(...txStatusEnum)
+    .description("Filter by transaction status"),
+  network: Joi.number()
+    .integer()
+    .min(0)
+    .max(2)
+    .description("Filter by network"),
+});
+
 module.exports = {
+  // Joi schemas
   txSignatureSchema,
   txModelSchema,
+  txSubmissionSchema,
+  txHashSchema,
+  monitoringQuerySchema,
+  // Mongoose schemas
   TxSignatureMongooseSchema,
   TxModelMongooseSchema,
+  // Enums
   txStatusEnum,
 };

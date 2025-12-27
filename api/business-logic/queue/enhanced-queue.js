@@ -1,5 +1,6 @@
 const createQueue = require("fastq");
 const EventEmitter = require("events");
+const logger = require("../../utils/logger").forComponent("queue");
 
 /**
  * Enhanced FastQ wrapper with monitoring, metrics, and adaptive concurrency
@@ -83,16 +84,18 @@ class EnhancedQueue extends EventEmitter {
             callback(null, result);
           }
         } catch (error) {
-          console.error(`[ERROR] Task ${taskId} failed:`, error);
+          logger.debug("Task error", { taskId, error: error.message });
           lastError = error;
           const processingTime = Date.now() - startTime;
 
           this.emit("taskError", { taskId, attempt, error, processingTime });
 
           if (attempt < this.options.retryAttempts && this.shouldRetry(error)) {
-            console.warn(
-              `[WARN] Retrying task ${taskId} (attempt ${attempt}/${this.options.retryAttempts})`
-            );
+            logger.debug("Scheduling task retry", {
+              taskId,
+              attempt,
+              maxAttempts: this.options.retryAttempts,
+            });
             this.stats.retries++;
             this.emit("taskRetry", { taskId, attempt: attempt + 1, error });
 
@@ -105,9 +108,10 @@ class EnhancedQueue extends EventEmitter {
                   Math.random() * 2000,
                 30000 // Cap at 30 seconds
               );
-              console.warn(
-                `[WARN] Rate limit detected for task ${taskId}, backing off for ${delay}ms`
-              );
+              logger.warn("Rate limit detected, backing off", {
+                taskId,
+                delay,
+              });
 
               // Temporarily reduce concurrency to ease pressure
               if (this.queue.concurrency > this.options.minConcurrency) {
@@ -115,9 +119,10 @@ class EnhancedQueue extends EventEmitter {
                   Math.floor(this.queue.concurrency * 0.7),
                   this.options.minConcurrency
                 );
-                console.warn(
-                  `[WARN] Reducing concurrency from ${this.queue.concurrency} to ${newConcurrency} due to rate limiting`
-                );
+                logger.warn("Reducing concurrency due to rate limiting", {
+                  oldConcurrency: this.queue.concurrency,
+                  newConcurrency,
+                });
                 this.queue.concurrency = newConcurrency;
               }
             } else {
@@ -129,10 +134,11 @@ class EnhancedQueue extends EventEmitter {
 
             setTimeout(attemptTask, delay);
           } else {
-            console.error(
-              `[ERROR] Task ${taskId} failed after ${attempt} attempts:`,
-              lastError.message || lastError.toString()
-            );
+            logger.error("Task failed permanently", {
+              taskId,
+              attempts: attempt,
+              error: lastError.message || lastError.toString(),
+            });
             this.updateStats(processingTime, false);
             this.emit("taskFailed", {
               taskId,

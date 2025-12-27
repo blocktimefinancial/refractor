@@ -5,6 +5,7 @@ const DataProvider = require("./data-provider");
 const { TxModel } = require("../models/mongoose-models");
 const { txModelSchema } = require("../schemas/tx-schema");
 const Joi = require("joi");
+const logger = require("../utils/logger").forComponent("mongoose");
 
 class MongooseDataProvider extends DataProvider {
   async init() {
@@ -23,26 +24,26 @@ class MongooseDataProvider extends DataProvider {
 
     try {
       await mongoose.connect(config.db, options);
-      console.log(
-        `Connected to MongoDB via Mongoose: ${mongoose.connection.name}`
-      );
+      logger.info("Connected to MongoDB", {
+        database: mongoose.connection.name,
+      });
 
       // Set up connection event handlers
       mongoose.connection.on("error", (err) => {
-        console.error("MongoDB connection error:", err);
+        logger.error("MongoDB connection error", { error: err.message });
       });
 
       mongoose.connection.on("disconnected", () => {
-        console.warn("MongoDB disconnected");
+        logger.warn("MongoDB disconnected");
       });
 
       mongoose.connection.on("reconnected", () => {
-        console.log("MongoDB reconnected");
+        logger.info("MongoDB reconnected");
       });
 
       this.db = mongoose.connection.db;
     } catch (error) {
-      console.error("Failed to connect to MongoDB:", error);
+      logger.error("Failed to connect to MongoDB", { error: error.message });
       throw error;
     }
   }
@@ -155,27 +156,23 @@ class MongooseDataProvider extends DataProvider {
         filter.status = expectedCurrentStatus;
       }
 
-      console.log(
-        `[DEBUG] updateTransaction - filter:`,
-        JSON.stringify(filter)
-      );
-      console.log(
-        `[DEBUG] updateTransaction - update:`,
-        JSON.stringify(update)
-      );
+      logger.debug("Updating transaction", { hash, filter, update });
 
       // Add update timestamp
       update.updatedAt = new Date();
 
       const result = await TxModel.updateOne(filter, { $set: update });
 
-      console.log(
-        `[DEBUG] updateTransaction - result:`,
-        JSON.stringify(result)
-      );
+      logger.debug("Update result", {
+        hash,
+        matchedCount: result.matchedCount,
+      });
       return result.matchedCount > 0;
     } catch (error) {
-      console.error("Error updating transaction:", error);
+      logger.error("Error updating transaction", {
+        hash,
+        error: error.message,
+      });
       throw error;
     }
   }
@@ -300,12 +297,44 @@ class MongooseDataProvider extends DataProvider {
   }
 
   /**
+   * Check database connectivity and health
+   * @returns {Promise<{connected: boolean, latencyMs: number, error?: string}>}
+   */
+  async checkHealth() {
+    const start = Date.now();
+    try {
+      if (mongoose.connection.readyState !== 1) {
+        return {
+          connected: false,
+          latencyMs: Date.now() - start,
+          error: "Database connection not established",
+        };
+      }
+
+      // Perform actual ping to verify connectivity
+      await mongoose.connection.db.admin().ping();
+
+      return {
+        connected: true,
+        latencyMs: Date.now() - start,
+      };
+    } catch (error) {
+      logger.error("Database health check failed", { error: error.message });
+      return {
+        connected: false,
+        latencyMs: Date.now() - start,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
    * Close database connection
    */
   async close() {
     if (mongoose.connection.readyState === 1) {
       await mongoose.connection.close();
-      console.log("MongoDB connection closed");
+      logger.info("MongoDB connection closed");
     }
   }
 }

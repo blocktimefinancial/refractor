@@ -46,5 +46,12 @@ console.log(
 ); // Hide credentials
 console.log(`- Public Horizon: ${config.networks.public.horizon}`);
 console.log(`- Testnet Horizon: ${config.networks.testnet.horizon}`);
+console.log(
+  `- Admin API Key: ${
+    process.env.ADMIN_API_KEY
+      ? "configured"
+      : "NOT SET (admin endpoints disabled)"
+  }`
+);
 
 module.exports = config;

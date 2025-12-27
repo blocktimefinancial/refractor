@@ -13,7 +13,8 @@ const {
   { loadTxSourceAccountsInfo } = require("./account-info-provider"),
   { sliceTx, parseTxParams } = require("./tx-params-parser"),
   { rehydrateTx } = require("./tx-loader"),
-  { hintMatchesKey, hintToMask } = require("./signature-hint-utils");
+  { hintMatchesKey, hintToMask } = require("./signature-hint-utils"),
+  logger = require("../utils/logger").forComponent("signer");
 
 class Signer {
   /**
@@ -186,9 +187,9 @@ class Signer {
     // If transaction just became ready, trigger immediate finalizer check
     if (!wasReady && this.txInfo.status === "ready") {
       const finalizer = require("./finalization/finalizer");
-      console.log(
-        `[DEBUG] Transaction ${this.txInfo.hash} became ready, triggering immediate finalizer check`
-      );
+      logger.info("Transaction became ready, triggering finalizer", {
+        hash: this.txInfo.hash,
+      });
       setImmediate(() => finalizer.triggerImmediateCheck());
     }
   }

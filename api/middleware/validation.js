@@ -1,84 +1,31 @@
 const Joi = require("joi");
-const { txModelSchema } = require("../schemas/tx-schema");
+const {
+  txSubmissionSchema,
+  txHashSchema,
+  monitoringQuerySchema,
+  txStatusEnum,
+} = require("../schemas/tx-schema");
 
 /**
  * Validation middleware factory for different endpoints
+ * Uses centralized schemas from schemas/tx-schema.js
  */
 class ValidationMiddleware {
   /**
    * Create validation middleware for transaction submission
+   * Uses txSubmissionSchema from tx-schema.js
    */
   static validateTransactionSubmission() {
-    const submissionSchema = Joi.object({
-      hash: Joi.string()
-        .pattern(/^[a-f0-9]{64}$/)
-        .required()
-        .description("Transaction hash (SHA-256)"),
-      network: Joi.number()
-        .integer()
-        .min(0)
-        .max(1)
-        .required()
-        .description("Network identifier (0=pubnet, 1=testnet)"),
-      xdr: Joi.string()
-        .required()
-        .description("Transaction XDR without signatures"),
-      signatures: Joi.array()
-        .items(
-          Joi.object({
-            key: Joi.string()
-              .pattern(/^G[A-Z2-7]{55}$/)
-              .required()
-              .description("Stellar public key (Ed25519)"),
-            signature: Joi.string()
-              .base64()
-              .required()
-              .description("Base64-encoded signature"),
-          })
-        )
-        .default([])
-        .description("Applied transaction signatures"),
-      submit: Joi.boolean()
-        .default(false)
-        .description("Submit transaction to network once signed"),
-      callbackUrl: Joi.string()
-        .uri()
-        .allow(null, "")
-        .description("Callback URL for transaction notification"),
-      desiredSigners: Joi.array()
-        .items(Joi.string().pattern(/^G[A-Z2-7]{55}$/))
-        .default([])
-        .description("List of signers requested by transaction author"),
-      minTime: Joi.number()
-        .integer()
-        .min(0)
-        .default(0)
-        .description(
-          "Point in time when transaction becomes valid (UNIX timestamp)"
-        ),
-      maxTime: Joi.number()
-        .integer()
-        .min(0)
-        .allow(null)
-        .description("Transaction expiration date (UNIX timestamp)"),
-    });
-
-    return this.createValidationMiddleware(submissionSchema);
+    return this.createValidationMiddleware(txSubmissionSchema);
   }
 
   /**
    * Create validation middleware for transaction hash parameter
+   * Uses txHashSchema from tx-schema.js
    */
   static validateTransactionHash() {
-    const hashSchema = Joi.object({
-      hash: Joi.string()
-        .pattern(/^[a-f0-9]{64}$/)
-        .required()
-        .description("Transaction hash (SHA-256)"),
-    });
-
     return (req, res, next) => {
-      const { error, value } = hashSchema.validate(req.params, {
+      const { error, value } = txHashSchema.validate(req.params, {
         abortEarly: false,
         stripUnknown: true,
       });
@@ -101,35 +48,10 @@ class ValidationMiddleware {
 
   /**
    * Create validation middleware for monitoring endpoints
+   * Uses monitoringQuerySchema from tx-schema.js
    */
   static validateMonitoringRequest() {
-    const monitoringSchema = Joi.object({
-      concurrency: Joi.number()
-        .integer()
-        .min(1)
-        .max(100)
-        .when(Joi.ref("$endpoint"), {
-          is: "concurrency",
-          then: Joi.required(),
-          otherwise: Joi.forbidden(),
-        }),
-      limit: Joi.number()
-        .integer()
-        .min(1)
-        .max(1000)
-        .default(100)
-        .description("Maximum number of results to return"),
-      status: Joi.string()
-        .valid("pending", "ready", "processing", "processed", "failed")
-        .description("Filter by transaction status"),
-      network: Joi.number()
-        .integer()
-        .min(0)
-        .max(1)
-        .description("Filter by network"),
-    });
-
-    return this.createValidationMiddleware(monitoringSchema, {
+    return this.createValidationMiddleware(monitoringQuerySchema, {
       allowUnknown: true,
     });
   }

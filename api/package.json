@@ -1,5 +1,5 @@
 {
-  "name": "BTF refractor-api",
+  "name": "btf-refractor-api",
   "private": true,
   "version": "0.4.0",
   "author": "BTF Development Team and the team@stellar.expert",
@@ -14,27 +14,29 @@
     "url": "https://github.com/stellar-expert/coordinator-stellar-expert.git"
   },
   "dependencies": {
-    "@google-cloud/firestore": "latest",
-    "@stellar-expert/tx-signers-inspector": "latest",
-    "@stellar/stellar-sdk": "latest",
-    "axios": "latest",
-    "body-parser": "latest",
-    "cors": "latest",
+    "@google-cloud/firestore": "^7.11.0",
+    "@stellar-expert/tx-signers-inspector": "^1.8.2",
+    "@stellar/stellar-sdk": "^13.2.0",
+    "axios": "^1.8.4",
+    "body-parser": "^2.2.0",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.0",
-    "express": "latest",
-    "express-rate-limit": "latest",
-    "fastq": "latest",
+    "express": "^5.1.0",
+    "express-rate-limit": "^7.5.0",
+    "fastq": "^1.19.1",
+    "helmet": "^8.1.0",
     "joi": "^17.13.3",
     "joigoose": "^8.0.2",
-    "lru-cache": "latest",
-    "mongodb": "latest",
-    "mongoose": "^8.0.3",
-    "morgan": "latest",
+    "lru-cache": "^11.1.0",
+    "mongodb": "^6.17.0",
+    "mongoose": "^8.16.4",
+    "morgan": "^1.10.0",
     "node-fetch": "^3.3.2",
-    "pg": "latest",
-    "pg-connection-string": "latest"
+    "pg": "^8.14.1",
+    "pg-connection-string": "^2.7.0",
+    "winston": "^3.19.0"
   },
   "devDependencies": {
-    "jest": "latest"
+    "jest": "^29.7.0"
   }
 }

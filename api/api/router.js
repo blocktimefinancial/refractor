@@ -1,12 +1,9 @@
-const cors = require("cors"),
+const { createCorsMiddleware } = require("../middleware/cors"),
+  { getRequestLogger } = require("../middleware/request-id"),
   rateLimit = require("express-rate-limit");
 
-const defaultCorsOptions = {
-  optionsSuccessStatus: 200,
-  origin: function (origin, callback) {
-    callback(null, true); // allow all origins for now
-  },
-};
+// Create CORS middleware instance with blacklist support
+const corsMiddleware = createCorsMiddleware();
 
 const rateLimits = {
   general: rateLimit({
@@ -46,13 +43,17 @@ function processResponse(res, promise, headers, prettyPrint = false) {
       }
     })
     .catch((err) => {
+      const reqLogger = getRequestLogger(res.req);
       if (err.status) {
         return res
           .status(err.status)
           .json({ error: err.message, status: err.status });
       }
       //unhandled error
-      console.error(err);
+      reqLogger.error("Unhandled route error", {
+        error: err.message,
+        stack: err.stack,
+      });
       res.status(500).json({ error: "Internal server error", status: 500 });
     });
 }
@@ -76,8 +77,7 @@ module.exports = {
       headers,
       middleware = [],
     } = options;
-    //middleware - CORS, rate limiting, and custom middleware
-    const corsMiddleware = cors({ ...defaultCorsOptions });
+    //middleware - CORS (with blacklist), rate limiting, and custom middleware
     const allMiddleware = [corsMiddleware, rateLimits[rate], ...middleware];
 
     //normalize route

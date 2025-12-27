@@ -2,6 +2,7 @@ const { Horizon, TransactionBuilder } = require("@stellar/stellar-sdk"),
   EnhancedQueue = require("../queue/enhanced-queue"),
   { resolveNetwork } = require("../network-resolver");
 const config = require("../../app.config.json");
+const logger = require("../../utils/logger").forComponent("horizon");
 
 const servers = {};
 
@@ -34,7 +35,7 @@ const horizonQueue = new EnhancedQueue(submitTransactionWorker, {
 
 // Set up monitoring for horizon queue
 horizonQueue.on("metrics", (metrics) => {
-  console.log("Horizon Queue Metrics:", {
+  logger.info("Queue metrics", {
     processed: metrics.processed,
     failed: metrics.failed,
     retries: metrics.retries,
@@ -61,31 +62,32 @@ horizonQueue.on("taskFailed", ({ taskId, attempts, error }) => {
   }
 
   if (error.status === 429) {
-    console.warn(`[WARN] Horizon rate limit failure:`, errorInfo);
+    logger.warn("Horizon rate limit failure", errorInfo);
   } else {
-    console.error(`[ERROR] Horizon submission failure:`, errorInfo);
+    logger.error("Horizon submission failure", errorInfo);
   }
 });
 
 horizonQueue.on("taskRetry", ({ taskId, attempt, error }) => {
   if (error.status === 429) {
-    console.warn(
-      `[WARN] Retrying rate-limited task ${taskId} (attempt ${attempt})`
-    );
+    logger.warn("Retrying rate-limited task", { taskId, attempt });
   } else {
-    console.warn(
-      `[WARN] Retrying failed task ${taskId} (attempt ${attempt}): ${error.message}`
-    );
+    logger.warn("Retrying failed task", {
+      taskId,
+      attempt,
+      error: error.message,
+    });
   }
 });
 
 horizonQueue.on(
   "concurrencyAdjusted",
   ({ oldConcurrency, newConcurrency, reason }) => {
-    console.log(
-      `[INFO] Horizon concurrency adjusted: ${oldConcurrency} → ${newConcurrency}`,
-      reason
-    );
+    logger.info("Concurrency adjusted", {
+      oldConcurrency,
+      newConcurrency,
+      reason,
+    });
   }
 );
 
@@ -131,24 +133,20 @@ async function submitTransaction(txInfo) {
 
       // Special logging for rate limit errors
       if (error.response.status === 429) {
-        console.warn(
-          `[WARN] Rate limit encountered for transaction ${txInfo.hash}:`,
-          {
-            status: enhancedError.status,
-            detail: enhancedError.detail,
-            retryAfter: error.response.headers?.["retry-after"],
-          }
-        );
+        logger.warn("Rate limit encountered", {
+          hash: txInfo.hash,
+          status: enhancedError.status,
+          detail: enhancedError.detail,
+          retryAfter: error.response.headers?.["retry-after"],
+        });
       } else {
-        console.error(
-          `[ERROR] Horizon submission error for transaction ${txInfo.hash}:`,
-          {
-            status: enhancedError.status,
-            detail: enhancedError.detail,
-            result_codes: enhancedError.result_codes,
-            operation_codes: enhancedError.operation_codes,
-          }
-        );
+        logger.error("Horizon submission error", {
+          hash: txInfo.hash,
+          status: enhancedError.status,
+          detail: enhancedError.detail,
+          result_codes: enhancedError.result_codes,
+          operation_codes: enhancedError.operation_codes,
+        });
       }
     } else {
       // Handle network errors and other non-HTTP errors
@@ -163,14 +161,12 @@ async function submitTransaction(txInfo) {
         enhancedError.code = error.code;
       }
 
-      console.error(
-        `[ERROR] Non-HTTP submission error for transaction ${txInfo.hash}:`,
-        {
-          message: enhancedError.message,
-          code: enhancedError.code,
-          originalError: error.message,
-        }
-      );
+      logger.error("Non-HTTP submission error", {
+        hash: txInfo.hash,
+        message: enhancedError.message,
+        code: enhancedError.code,
+        originalError: error.message,
+      });
     }
 
     throw enhancedError;

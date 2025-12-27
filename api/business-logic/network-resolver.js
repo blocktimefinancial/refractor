@@ -1,4 +1,5 @@
 // Edit LJM - Added MAINNET to the network resolver
+// Edit LJM - Changed default to return the network passed in in lowercase
 
 const { standardError } = require("./std-error"),
   { networks } = require("../app.config");
@@ -27,7 +28,7 @@ function normalizeNetworkName(network) {
     case "2":
       return "futurenet";
     default:
-      throw standardError(400, "Unidentified network: " + network);
+      return network.toLowerCase();
   }
 }
 

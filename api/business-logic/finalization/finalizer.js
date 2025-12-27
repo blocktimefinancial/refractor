@@ -5,6 +5,7 @@ const EnhancedQueue = require("../queue/enhanced-queue"),
   { submitTransaction } = require("./horizon-handler"),
   { getUnixTimestamp } = require("../timestamp-utils");
 const config = require("../../app.config");
+const logger = require("../../utils/logger").forComponent("finalizer");
 
 class Finalizer {
   constructor() {
@@ -36,7 +37,7 @@ class Finalizer {
    */
   setupQueueMonitoring() {
     this.finalizerQueue.on("metrics", (metrics) => {
-      console.log("Finalizer Queue Metrics:", {
+      logger.info("Queue metrics", {
         processed: metrics.processed,
         failed: metrics.failed,
         throughput: metrics.throughput.toFixed(2),
@@ -50,25 +51,28 @@ class Finalizer {
     this.finalizerQueue.on(
       "concurrencyAdjusted",
       ({ oldConcurrency, newConcurrency, reason }) => {
-        console.log(
-          `Finalizer concurrency adjusted: ${oldConcurrency} -> ${newConcurrency}`,
-          reason
-        );
+        logger.info("Concurrency adjusted", {
+          oldConcurrency,
+          newConcurrency,
+          reason,
+        });
       }
     );
 
     this.finalizerQueue.on("taskFailed", ({ taskId, attempts, error }) => {
-      console.error(
-        `Transaction ${taskId} failed after ${attempts} attempts:`,
-        error.message
-      );
+      logger.error("Transaction processing failed", {
+        hash: taskId,
+        attempts,
+        error: error.message,
+      });
     });
 
     this.finalizerQueue.on("taskRetry", ({ taskId, attempt, error }) => {
-      console.warn(
-        `Retrying transaction ${taskId} (attempt ${attempt}):`,
-        error.message
-      );
+      logger.warn("Retrying transaction", {
+        hash: taskId,
+        attempt,
+        error: error.message,
+      });
     });
   }
 
@@ -76,9 +80,10 @@ class Finalizer {
     let foundCount = 0;
     try {
       const now = getUnixTimestamp();
-      console.log(
-        `[DEBUG] Finalizer query - Current time: ${now}, looking for status=ready with minTime <= ${now}`
-      );
+      logger.debug("Querying for ready transactions", {
+        currentTime: now,
+        filter: "status=ready, minTime<=now",
+      });
 
       //get transactions ready to be submitted
       const cursor = await storageLayer.dataProvider.listTransactions({
@@ -88,36 +93,33 @@ class Finalizer {
 
       for await (let txInfo of cursor) {
         foundCount++;
-        console.log(
-          `[DEBUG] Found ready transaction: ${txInfo.hash}, minTime: ${txInfo.minTime}, status: ${txInfo.status}`
-        );
-        console.log(
-          `[DEBUG] Transaction object:`,
-          JSON.stringify(txInfo, null, 2)
-        );
+        logger.debug("Found ready transaction", {
+          hash: txInfo.hash,
+          minTime: txInfo.minTime,
+          status: txInfo.status,
+        });
 
         if (this.processorTimerHandler === 0) {
           //pipeline stop executed
-          console.log(
-            `[DEBUG] Processor timer handler is 0, stopping processing`
-          );
+          logger.debug("Processor stopped, halting batch processing");
           return;
         }
-        console.log(`[DEBUG] Pushing transaction ${txInfo.hash} to queue`);
+        logger.debug("Pushing transaction to queue", { hash: txInfo.hash });
         this.finalizerQueue.push(txInfo);
         //the queue length should not exceed the max queue size
         if (this.finalizerQueue.length() >= this.targetQueueSize) {
-          console.log(
-            `[DEBUG] Queue size limit reached (${this.targetQueueSize}), breaking batch but continuing processing`
-          );
+          logger.debug("Queue size limit reached", {
+            limit: this.targetQueueSize,
+          });
           break;
         }
       }
-      console.log(
-        `[DEBUG] Finalizer batch complete - found ${foundCount} ready transactions`
-      );
+      logger.debug("Batch complete", { foundCount });
     } catch (e) {
-      console.error(e);
+      logger.error("Error in batch scheduling", {
+        error: e.message,
+        stack: e.stack,
+      });
     }
 
     // If we found transactions and hit the queue size limit, schedule next batch sooner
@@ -134,9 +136,11 @@ class Finalizer {
       nextTimeout = this.tickerTimeout;
     }
 
-    console.log(
-      `[DEBUG] Scheduling next batch in ${nextTimeout}ms (found ${foundCount} transactions, queue limit: ${this.targetQueueSize})`
-    );
+    logger.debug("Scheduling next batch", {
+      nextTimeout,
+      foundCount,
+      queueLimit: this.targetQueueSize,
+    });
 
     this.processorTimerHandler = setTimeout(
       () => this.scheduleTransactionsBatch(),
@@ -168,20 +172,22 @@ class Finalizer {
    * @returns {Promise} - Enhanced queue expects promises, not callbacks
    */
   async processTx(txInfo) {
-    console.log(
-      `[DEBUG] ProcessTx called for: ${txInfo.hash}, status: ${txInfo.status}`
-    );
+    logger.debug("Processing transaction", {
+      hash: txInfo.hash,
+      status: txInfo.status,
+    });
 
     if (txInfo.status !== "ready") {
-      console.log(
-        `[DEBUG] Skipping transaction ${txInfo.hash} - status is not ready: ${txInfo.status}`
-      );
+      logger.debug("Skipping transaction - not ready", {
+        hash: txInfo.hash,
+        status: txInfo.status,
+      });
       return;
     }
 
     try {
       //lock tx
-      console.log(`[DEBUG] Attempting to lock transaction ${txInfo.hash}`);
+      logger.debug("Attempting to lock transaction", { hash: txInfo.hash });
       if (
         !(await storageLayer.dataProvider.updateTxStatus(
           txInfo.hash,
@@ -189,51 +195,48 @@ class Finalizer {
           "ready"
         ))
       ) {
-        console.log(
-          `[DEBUG] Failed to obtain lock for transaction ${txInfo.hash}`
-        );
+        logger.debug("Failed to obtain lock", { hash: txInfo.hash });
         return; //failed to obtain a lock - some other thread is currently processing this transaction
       }
-      console.log(`[DEBUG] Successfully locked transaction ${txInfo.hash}`);
+      logger.debug("Transaction locked", { hash: txInfo.hash });
     } catch (e) {
-      console.error(`[DEBUG] Error locking transaction ${txInfo.hash}:`, e);
+      logger.error("Error locking transaction", {
+        hash: txInfo.hash,
+        error: e.message,
+      });
       return; //invalid current state
     }
 
     try {
       if (txInfo.maxTime && txInfo.maxTime < getUnixTimestamp()) {
-        console.log(`[DEBUG] Transaction ${txInfo.hash} has expired`);
+        logger.warn("Transaction expired", { hash: txInfo.hash });
         throw new Error(`Transaction has already expired`);
       }
 
-      console.log(`[DEBUG] Rehydrating transaction ${txInfo.hash}`);
+      logger.debug("Rehydrating transaction", { hash: txInfo.hash });
       const txInfoFull = rehydrateTx(txInfo);
       const update = { status: "processed" };
 
-      console.log(
-        `[DEBUG] Transaction ${txInfo.hash} - callbackUrl: ${txInfo.callbackUrl}, submit: ${txInfo.submit}`
-      );
+      logger.debug("Transaction options", {
+        hash: txInfo.hash,
+        hasCallback: !!txInfo.callbackUrl,
+        submit: !!txInfo.submit,
+      });
 
       if (txInfo.callbackUrl) {
-        console.log(
-          `[DEBUG] Processing callback for transaction ${txInfo.hash}`
-        );
+        logger.debug("Processing callback", { hash: txInfo.hash });
         await processCallback(txInfoFull);
-        console.log(
-          `[DEBUG] Callback processed for transaction ${txInfo.hash}`
-        );
+        logger.debug("Callback complete", { hash: txInfo.hash });
       }
 
       if (txInfo.submit) {
-        console.log(`[DEBUG] Submitting transaction ${txInfo.hash} to horizon`);
+        logger.debug("Submitting to Horizon", { hash: txInfo.hash });
         await submitTransaction(txInfoFull);
         update.submitted = getUnixTimestamp();
-        console.log(`[DEBUG] Transaction ${txInfo.hash} submitted to horizon`);
+        logger.info("Transaction submitted to Horizon", { hash: txInfo.hash });
       }
 
-      console.log(
-        `[DEBUG] Updating transaction ${txInfo.hash} status to processed`
-      );
+      logger.debug("Updating status to processed", { hash: txInfo.hash });
       if (
         !(await storageLayer.dataProvider.updateTransaction(
           txInfo.hash,
@@ -241,17 +244,18 @@ class Finalizer {
           "processing"
         ))
       ) {
-        console.log(
-          `[DEBUG] Failed to update transaction ${txInfo.hash} to processed status`
-        );
+        logger.error("Failed to update status to processed", {
+          hash: txInfo.hash,
+        });
         throw new Error(`State conflict after callback execution`);
       }
-      console.log(
-        `[DEBUG] Successfully updated transaction ${txInfo.hash} to processed status`
-      );
+      logger.info("Transaction processed successfully", { hash: txInfo.hash });
     } catch (e) {
-      console.error("TX " + txInfo.hash + " processing failed");
-      console.error(e);
+      logger.error("Transaction processing failed", {
+        hash: txInfo.hash,
+        error: e.message,
+        resultCodes: e.result_codes || null,
+      });
 
       // Enhanced error information capture
       const errorInfo = {
@@ -261,10 +265,7 @@ class Finalizer {
         hash: txInfo.hash,
       };
 
-      console.log(
-        `[DEBUG] Updating transaction ${txInfo.hash} status to failed with error:`,
-        errorInfo
-      );
+      logger.debug("Updating status to failed", errorInfo);
 
       await storageLayer.dataProvider.updateTxStatus(
         txInfo.hash,
@@ -280,10 +281,10 @@ class Finalizer {
    * Wrapper method to bridge the gap between FastQ callback style and async/await
    */
   processTxWrapper(txInfo) {
-    console.log(
-      `[DEBUG] ProcessTxWrapper called with:`,
-      JSON.stringify(txInfo, null, 2)
-    );
+    logger.debug("Processing transaction wrapper", {
+      hasDoc: !!txInfo._doc,
+      hasToJSON: !!txInfo.toJSON,
+    });
 
     // Extract the actual transaction data from Mongoose document
     let actualTxInfo;
@@ -298,10 +299,9 @@ class Finalizer {
       actualTxInfo = txInfo;
     }
 
-    console.log(
-      `[DEBUG] Extracted transaction data:`,
-      JSON.stringify(actualTxInfo, null, 2)
-    );
+    logger.debug("Extracted transaction data", {
+      hash: actualTxInfo.hash || actualTxInfo._id,
+    });
 
     return this.processTx(actualTxInfo);
   }
@@ -315,39 +315,46 @@ class Finalizer {
       this.processorTimerHandler !== 0 &&
       this.finalizerQueue.length() < this.targetQueueSize
     ) {
-      console.log(
-        `[DEBUG] Immediate check triggered - queue length: ${this.finalizerQueue.length()}`
-      );
+      logger.debug("Immediate check triggered", {
+        queueLength: this.finalizerQueue.length(),
+      });
       clearTimeout(this.processorTimerHandler);
       setImmediate(() => this.scheduleTransactionsBatch());
     }
   }
 
   start() {
-    this.scheduleTransactionsBatch().catch((e) => console.error(e));
+    logger.info("Finalizer started");
+    this.scheduleTransactionsBatch().catch((e) =>
+      logger.error("Batch scheduling error", { error: e.message })
+    );
   }
 
   async stop() {
     clearTimeout(this.processorTimerHandler);
     this.processorTimerHandler = 0;
     //clear the pending queue and wait for completion
-    console.log(
-      `[DEBUG] Stopping finalizer queue, waiting for all tasks to complete`
-    );
+    logger.info("Stopping finalizer, waiting for tasks to complete");
     await this.finalizerQueue.kill();
+    logger.info("Finalizer stopped");
   }
 
   async resetProcessingStatus() {
-    console.log(`[DEBUG] Resetting processing status for all transactions`);
+    logger.info("Resetting processing status for stale transactions");
     const cursor = await storageLayer.dataProvider.listTransactions({
       status: "processing",
     });
+    let count = 0;
     for await (let txInfo of cursor) {
       await storageLayer.dataProvider.updateTxStatus(
         txInfo.hash,
         "ready",
         "processing"
       );
+      count++;
+    }
+    if (count > 0) {
+      logger.info("Reset stale transactions", { count });
     }
   }
 }
