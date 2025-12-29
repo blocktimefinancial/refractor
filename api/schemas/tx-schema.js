@@ -124,6 +124,17 @@ const txModelSchema = Joi.object({
     .default("base64")
     .description("Payload encoding format"),
 
+  // ---- JSON representation ----
+  txJson: Joi.alternatives()
+    .try(
+      Joi.string().max(500000), // JSON string up to 500KB
+      Joi.object() // Or direct object
+    )
+    .allow(null)
+    .description(
+      "JSON representation of the transaction for human readability"
+    ),
+
   // ---- Legacy Stellar fields (kept for backward compatibility) ----
   network: Joi.number()
     .integer()

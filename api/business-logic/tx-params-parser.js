@@ -16,11 +16,12 @@ const { StrKey } = require("@stellar/stellar-sdk"),
  * @param {Boolean} [request.submit] - Auto-submit flag
  * @param {Array<String>} [request.desiredSigners] - Desired signers
  * @param {Number} [request.expires] - Expiration timestamp
+ * @param {String|Object} [request.txJson] - JSON representation of the transaction
  * @returns {TxModel}
  */
 function parseTxParams(
   tx,
-  { network, callbackUrl, submit, desiredSigners, expires = 0 }
+  { network, callbackUrl, submit, desiredSigners, expires = 0, txJson }
 ) {
   const now = getUnixTimestamp();
   const txInfo = new TxModel();
@@ -33,6 +34,12 @@ function parseTxParams(
   txInfo.networkName = resolveNetwork(network)?.network || "public";
   txInfo.payload = txInfo.xdr;
   txInfo.encoding = "base64";
+
+  // Store JSON representation if provided
+  if (txJson) {
+    txInfo.txJson =
+      typeof txJson === "string" ? txJson : JSON.stringify(txJson);
+  }
 
   if (callbackUrl) {
     if (
@@ -105,6 +112,7 @@ function parseTxParams(
  * @param {string} request.payload - Encoded transaction payload
  * @param {string} request.encoding - Payload encoding
  * @param {string} [request.txUri] - Transaction URI
+ * @param {string|Object} [request.txJson] - JSON representation of the transaction
  * @param {string} [request.callbackUrl] - Callback URL
  * @param {boolean} [request.submit] - Auto-submit flag
  * @param {Array<string>} [request.desiredSigners] - Desired signers
@@ -120,6 +128,7 @@ function parseBlockchainAgnosticParams(request) {
     payload,
     encoding,
     txUri,
+    txJson,
     callbackUrl,
     submit,
     desiredSigners,
@@ -160,6 +169,12 @@ function parseBlockchainAgnosticParams(request) {
   txInfo.encoding = encoding;
   txInfo.txUri = txUri;
   txInfo.signatures = [];
+
+  // Store JSON representation if provided
+  if (txJson) {
+    txInfo.txJson =
+      typeof txJson === "string" ? txJson : JSON.stringify(txJson);
+  }
 
   // Legacy fields for Stellar compatibility
   if (blockchain === "stellar" && legacy) {

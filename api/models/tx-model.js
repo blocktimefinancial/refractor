@@ -50,6 +50,13 @@ class TxModel {
    */
   encoding = "base64";
 
+  /**
+   * JSON representation of the transaction for human readability.
+   * Can be a JSON string or an object (will be stringified for storage).
+   * @type {String|Object|null}
+   */
+  txJson = null;
+
   // ============================================================================
   // Legacy Stellar Fields (kept for backward compatibility)
   // ============================================================================

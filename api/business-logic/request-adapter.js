@@ -26,6 +26,7 @@ const logger = require("../utils/logger").forComponent("request-adapter");
  * @property {string} payload - Encoded transaction payload
  * @property {string} encoding - Payload encoding (base64, hex, base58, etc.)
  * @property {string} txUri - Full transaction URI
+ * @property {string|Object} [txJson] - JSON representation of the transaction
  * @property {string} [callbackUrl] - Optional callback URL
  * @property {boolean} [submit] - Whether to auto-submit when ready
  * @property {Array<string>} [desiredSigners] - List of desired signer keys
@@ -57,6 +58,24 @@ const STELLAR_NETWORK_ID_MAP = {
   testnet: 1,
   futurenet: 2,
 };
+
+/**
+ * Normalize txJson field to a consistent format
+ * @param {string|Object|null|undefined} txJson - Raw txJson from request
+ * @returns {string|null} Normalized txJson as string or null
+ */
+function normalizeTxJson(txJson) {
+  if (txJson === null || txJson === undefined) {
+    return null;
+  }
+  if (typeof txJson === "string") {
+    return txJson;
+  }
+  if (typeof txJson === "object") {
+    return JSON.stringify(txJson);
+  }
+  return null;
+}
 
 /**
  * Detect the format of an incoming transaction request
@@ -95,7 +114,8 @@ function detectRequestFormat(body) {
  * @returns {NormalizedRequest} Normalized request
  */
 function normalizeLegacyRequest(body) {
-  const { xdr, network, callbackUrl, submit, desiredSigners, expires } = body;
+  const { xdr, network, callbackUrl, submit, desiredSigners, expires, txJson } =
+    body;
 
   // Resolve network name from ID or string
   let networkName;
@@ -120,12 +140,16 @@ function normalizeLegacyRequest(body) {
   // Generate txUri from legacy format
   const txUri = convertLegacyStellarToUri(xdr, networkName);
 
+  // Normalize txJson (stringify if object)
+  const normalizedTxJson = normalizeTxJson(txJson);
+
   return {
     blockchain: "stellar",
     networkName,
     payload: xdr,
     encoding: "base64",
     txUri,
+    txJson: normalizedTxJson,
     callbackUrl,
     submit: submit === true,
     desiredSigners: desiredSigners || [],
@@ -144,7 +168,18 @@ function normalizeLegacyRequest(body) {
  * @returns {NormalizedRequest} Normalized request
  */
 function normalizeTxUriRequest(body) {
-  const { txUri, callbackUrl, submit, desiredSigners, minTime, maxTime } = body;
+  const {
+    txUri,
+    callbackUrl,
+    submit,
+    desiredSigners,
+    minTime,
+    maxTime,
+    txJson,
+  } = body;
+
+  // Normalize txJson (stringify if object)
+  const normalizedTxJson = normalizeTxJson(txJson);
 
   let parsed;
 
@@ -181,6 +216,7 @@ function normalizeTxUriRequest(body) {
     payload,
     encoding,
     txUri,
+    txJson: normalizedTxJson,
     callbackUrl,
     submit: submit === true,
     desiredSigners: desiredSigners || [],
@@ -206,7 +242,11 @@ function normalizeComponentRequest(body) {
     desiredSigners,
     minTime,
     maxTime,
+    txJson,
   } = body;
+
+  // Normalize txJson (stringify if object)
+  const normalizedTxJson = normalizeTxJson(txJson);
 
   // Validate blockchain
   if (!isValidBlockchain(blockchain)) {
@@ -242,6 +282,7 @@ function normalizeComponentRequest(body) {
     payload,
     encoding,
     txUri,
+    txJson: normalizedTxJson,
     callbackUrl,
     submit: submit === true,
     desiredSigners: desiredSigners || [],

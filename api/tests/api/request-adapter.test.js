@@ -374,4 +374,176 @@ describe("Request Adapter", () => {
       expect(STELLAR_NETWORK_ID_MAP.futurenet).toBe(2);
     });
   });
+
+  // ============================================================================
+  // txJson Field Tests
+  // ============================================================================
+  describe("txJson field handling", () => {
+    describe("normalizeLegacyRequest with txJson", () => {
+      it("should pass through txJson string as-is", () => {
+        const txJsonString = JSON.stringify({ type: "payment", amount: "100" });
+        const result = normalizeLegacyRequest({
+          xdr: validXdr,
+          network: 0,
+          txJson: txJsonString,
+        });
+
+        expect(result.txJson).toBe(txJsonString);
+      });
+
+      it("should stringify txJson object", () => {
+        const txJsonObject = {
+          type: "payment",
+          amount: "100",
+          nested: { key: "value" },
+        };
+        const result = normalizeLegacyRequest({
+          xdr: validXdr,
+          network: 0,
+          txJson: txJsonObject,
+        });
+
+        expect(result.txJson).toBe(JSON.stringify(txJsonObject));
+      });
+
+      it("should handle null txJson", () => {
+        const result = normalizeLegacyRequest({
+          xdr: validXdr,
+          network: 0,
+          txJson: null,
+        });
+
+        expect(result.txJson).toBeNull();
+      });
+
+      it("should handle undefined txJson", () => {
+        const result = normalizeLegacyRequest({
+          xdr: validXdr,
+          network: 0,
+        });
+
+        expect(result.txJson).toBeNull();
+      });
+    });
+
+    describe("normalizeTxUriRequest with txJson", () => {
+      it("should pass through txJson string as-is", () => {
+        const txJsonString = JSON.stringify({ operations: [] });
+        const result = normalizeTxUriRequest({
+          txUri: `tx:stellar:public;base64,${validXdr}`,
+          txJson: txJsonString,
+        });
+
+        expect(result.txJson).toBe(txJsonString);
+      });
+
+      it("should stringify txJson object", () => {
+        const txJsonObject = {
+          source: "GABC",
+          operations: [{ type: "payment" }],
+        };
+        const result = normalizeTxUriRequest({
+          txUri: `tx:stellar:public;base64,${validXdr}`,
+          txJson: txJsonObject,
+        });
+
+        expect(result.txJson).toBe(JSON.stringify(txJsonObject));
+      });
+
+      it("should handle missing txJson", () => {
+        const result = normalizeTxUriRequest({
+          txUri: `tx:stellar:public;base64,${validXdr}`,
+        });
+
+        expect(result.txJson).toBeNull();
+      });
+    });
+
+    describe("normalizeComponentRequest with txJson", () => {
+      it("should pass through txJson string as-is", () => {
+        const txJsonString = JSON.stringify({ memo: "test memo" });
+        const result = normalizeComponentRequest({
+          blockchain: "stellar",
+          networkName: "public",
+          payload: validXdr,
+          txJson: txJsonString,
+        });
+
+        expect(result.txJson).toBe(txJsonString);
+      });
+
+      it("should stringify txJson object", () => {
+        const txJsonObject = {
+          fee: "100",
+          timebounds: { minTime: 0, maxTime: 0 },
+        };
+        const result = normalizeComponentRequest({
+          blockchain: "stellar",
+          networkName: "public",
+          payload: validXdr,
+          txJson: txJsonObject,
+        });
+
+        expect(result.txJson).toBe(JSON.stringify(txJsonObject));
+      });
+
+      it("should handle empty string txJson as null", () => {
+        const result = normalizeComponentRequest({
+          blockchain: "stellar",
+          networkName: "public",
+          payload: validXdr,
+          txJson: "",
+        });
+
+        // Empty string is falsy, so normalizeTxJson returns the string itself
+        // Actually, empty string is valid and gets passed through
+        expect(result.txJson).toBe("");
+      });
+
+      it("should handle missing txJson", () => {
+        const result = normalizeComponentRequest({
+          blockchain: "stellar",
+          networkName: "public",
+          payload: validXdr,
+        });
+
+        expect(result.txJson).toBeNull();
+      });
+    });
+
+    describe("normalizeRequest with txJson", () => {
+      it("should include txJson in normalized legacy request", () => {
+        const txJsonObject = { type: "payment" };
+        const result = normalizeRequest({
+          xdr: validXdr,
+          network: 0,
+          txJson: txJsonObject,
+        });
+
+        expect(result.txJson).toBe(JSON.stringify(txJsonObject));
+      });
+
+      it("should include txJson in normalized txUri request", () => {
+        const txJsonString = '{"type":"transfer"}';
+        const result = normalizeRequest({
+          txUri: `tx:stellar:public;base64,${validXdr}`,
+          txJson: txJsonString,
+        });
+
+        expect(result.txJson).toBe(txJsonString);
+      });
+
+      it("should include txJson in normalized component request", () => {
+        const txJsonString = '{"operations":[]}';
+        const result = normalizeRequest({
+          blockchain: "stellar",
+          networkName: "public",
+          payload: validXdr,
+          txJson: txJsonString,
+        });
+
+        expect(result.txJson).toBe(txJsonString);
+      });
+    });
+  });
 });

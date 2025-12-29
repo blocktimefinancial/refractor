@@ -59,6 +59,10 @@ function rehydrateTx(txInfo) {
     res.payload = res.xdr;
     res.encoding = "base64";
     res.txUri = convertLegacyStellarToUri(res.xdr, res.networkName);
+    // Include txJson if present
+    if (txInfo.txJson) {
+      res.txJson = txInfo.txJson;
+    }
   } else {
     // Generic blockchain handling (future)
     res.blockchain = blockchain;
@@ -66,6 +70,10 @@ function rehydrateTx(txInfo) {
     res.payload = txInfo.payload || xdr;
     res.encoding = txInfo.encoding || "base64";
     res.txUri = txInfo.txUri;
+    // Include txJson if present
+    if (txInfo.txJson) {
+      res.txJson = txInfo.txJson;
+    }
     // Keep legacy xdr for backward compatibility if present
     if (xdr) {
       res.xdr = xdr;
