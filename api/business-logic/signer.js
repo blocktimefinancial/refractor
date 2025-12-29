@@ -11,9 +11,15 @@ const {
   { standardError } = require("./std-error"),
   storageLayer = require("../storage/storage-layer"),
   { loadTxSourceAccountsInfo } = require("./account-info-provider"),
-  { sliceTx, parseTxParams } = require("./tx-params-parser"),
+  {
+    sliceTx,
+    parseTxParams,
+    parseBlockchainAgnosticParams,
+  } = require("./tx-params-parser"),
   { rehydrateTx } = require("./tx-loader"),
   { hintMatchesKey, hintToMask } = require("./signature-hint-utils"),
+  { getHandler, hasHandler } = require("./handlers/handler-factory"),
+  { isEvmBlockchain } = require("./handlers/evm-handler"),
   logger = require("../utils/logger").forComponent("signer");
 
 class Signer {
@@ -21,16 +27,62 @@ class Signer {
    * @param {Object} request
    */
   constructor(request) {
-    const { xdr, network } = request;
+    // Determine blockchain from request
+    const blockchain = request.blockchain || "stellar";
+    this.blockchain = blockchain.toLowerCase();
+
+    // Check if we have a handler for this blockchain
+    if (!hasHandler(this.blockchain)) {
+      throw standardError(
+        501,
+        `Signing not yet implemented for blockchain: ${this.blockchain}`
+      );
+    }
+
+    // Route to appropriate initialization
+    if (this.blockchain === "stellar" || this.blockchain === "onemoney") {
+      this._initStellarCompatible(request);
+    } else if (isEvmBlockchain(this.blockchain)) {
+      this._initEvm(request);
+    } else {
+      throw standardError(
+        501,
+        `Signing not yet implemented for blockchain: ${this.blockchain}`
+      );
+    }
+
+    this.accepted = [];
+    this.rejected = [];
+    this.status = "created"; //always assume that the tx is new one until we fetched details from db
+  }
+
+  /**
+   * Initialize for Stellar-compatible blockchains (Stellar and 1Money)
+   * @private
+   */
+  _initStellarCompatible(request) {
+    const handler = getHandler(this.blockchain);
+
+    // For legacy Stellar requests, get xdr and network
+    // For new format, use payload and networkName
+    const payload = request.payload || request.xdr;
+    const networkName = request.networkName || request.network;
+
+    if (!payload) {
+      throw standardError(
+        400,
+        `Missing transaction payload for ${this.blockchain}`
+      );
+    }
+
     let txEnvelope;
     try {
-      txEnvelope = TransactionBuilder.fromXDR(
-        xdr,
-        resolveNetwork(network).passphrase
-      );
+      txEnvelope = handler.parseTransaction(payload, "base64", networkName);
     } catch (e) {
-      throw standardError(400, `Invalid transaction XDR`);
+      if (e.status) throw e;
+      throw standardError(400, `Invalid transaction data`);
     }
+
     if (txEnvelope instanceof FeeBumpTransaction)
       throw standardError(406, `FeeBump transactions not supported`);
 
@@ -39,11 +91,49 @@ class Signer {
     this.hashRaw = tx.hash();
     this.hash = this.hashRaw.toString("hex");
     this.signaturesToProcess = signatures;
-    this.txInfo = parseTxParams(tx, request);
+
+    // Use handler's parseTransactionParams if available, otherwise fall back
+    if (handler.parseTransactionParams) {
+      this.txInfo = handler.parseTransactionParams(tx, request);
+    } else {
+      this.txInfo = parseTxParams(tx, request);
+    }
     this.txInfo.hash = this.hash;
-    this.accepted = [];
-    this.rejected = [];
-    this.status = "created"; //always assume that the tx is new one until we fetched details from db
+    this.txInfo.blockchain = this.blockchain;
+
+    // Store handler reference
+    this._handler = handler;
+  }
+
+  /**
+   * Initialize for EVM-compatible blockchains
+   * @private
+   */
+  _initEvm(request) {
+    const handler = getHandler(this.blockchain);
+    const { payload, networkName, encoding = "hex" } = request;
+
+    if (!payload) {
+      throw standardError(400, "Missing payload for EVM transaction");
+    }
+
+    // Parse the transaction
+    this.tx = handler.parseTransaction(payload, encoding, networkName);
+
+    // Compute hash
+    const { hash, hashRaw } = handler.computeHash(this.tx);
+    this.hash = hash;
+    this.hashRaw = hashRaw;
+
+    // Extract existing signatures (if any)
+    this.signaturesToProcess = handler.extractSignatures(this.tx);
+
+    // Parse transaction params
+    this.txInfo = handler.parseTransactionParams(this.tx, request);
+    this.txInfo.hash = this.hash;
+
+    // Store handler reference for later use
+    this._handler = handler;
   }
 
   /**
@@ -98,6 +188,24 @@ class Signer {
     } else {
       this.status = "created";
     }
+
+    // Route to blockchain-specific initialization
+    if (this.blockchain === "stellar") {
+      await this._initStellarSigners();
+    } else if (this.blockchain === "onemoney") {
+      await this._initOneMoneySigners();
+    } else if (isEvmBlockchain(this.blockchain)) {
+      await this._initEvmSigners();
+    }
+
+    return this;
+  }
+
+  /**
+   * Initialize Stellar-specific signer discovery
+   * @private
+   */
+  async _initStellarSigners() {
     const { horizon } = resolveNetworkParams(this.txInfo.network);
     const accountsInfo = await loadTxSourceAccountsInfo(
       this.tx,
@@ -110,19 +218,77 @@ class Signer {
     });
     //get all signers that can potentially sign the transaction
     this.potentialSigners = this.schema.getAllPotentialSigners();
-    return this;
+  }
+
+  /**
+   * Initialize 1Money-specific signer discovery
+   * @private
+   */
+  async _initOneMoneySigners() {
+    const handler = this._handler || getHandler(this.blockchain);
+
+    // Get potential signers from the handler
+    this.potentialSigners = await handler.getPotentialSigners(
+      this.tx,
+      this.txInfo.networkName
+    );
+
+    // For 1Money, use a simple signature feasibility check
+    // In the future, could integrate with 1Money's signer discovery
+    this.schema = {
+      checkFeasibility: (signerKeys) => {
+        // At least one signature from a valid signer
+        return (
+          signerKeys.length > 0 &&
+          signerKeys.some((key) => this.potentialSigners.includes(key))
+        );
+      },
+      getAllPotentialSigners: () => this.potentialSigners,
+    };
+  }
+
+  /**
+   * Initialize EVM-specific signer discovery
+   * @private
+   */
+  async _initEvmSigners() {
+    const handler = this._handler || getHandler(this.blockchain);
+
+    // Get potential signers from the handler
+    this.potentialSigners = await handler.getPotentialSigners(
+      this.tx,
+      this.txInfo.networkName
+    );
+
+    // For EVM, we don't have a complex signer schema like Stellar
+    // EVM transactions have exactly one signer (the sender)
+    this.schema = {
+      // Simple feasibility check: is the transaction signed?
+      checkFeasibility: (signerKeys) => {
+        // EVM needs exactly one signature from the sender
+        return signerKeys.length > 0;
+      },
+      getAllPotentialSigners: () => this.potentialSigners,
+    };
   }
 
   get isReady() {
+    // For EVM transactions, check if we have a valid signature
+    if (isEvmBlockchain(this.blockchain)) {
+      return this.txInfo.signatures && this.txInfo.signatures.length > 0;
+    }
+    // For Stellar, use the schema-based feasibility check
     return this.schema.checkFeasibility(
       this.txInfo.signatures.map((s) => s.key)
     );
   }
 
   /**
-   * @param {Object} rawSignature
+   * Process a Stellar signature
+   * @param {Object} rawSignature - Stellar signature object
+   * @private
    */
-  processSignature(rawSignature) {
+  _processStellarSignature(rawSignature) {
     //get props from the raw signature
     const { hint, signature } = rawSignature._attributes;
     //init wrapped signature object
@@ -132,7 +298,9 @@ class Signer {
       signature instanceof Buffer ? signature.toString("base64") : signature;
     //find matching signer from potential signers list
     signaturePair.key = this.potentialSigners.find(
-      (key) => hintMatchesKey(hint, key) && this.verifySignature(key, signature)
+      (key) =>
+        hintMatchesKey(hint, key) &&
+        this._verifyStellarSignature(key, signature)
     );
     //verify the signature
     if (signaturePair.key) {
@@ -148,23 +316,111 @@ class Signer {
     }
   }
 
-  verifySignature(key, signature) {
+  /**
+   * Process an EVM signature
+   * @param {Object} rawSignature - EVM signature object with v, r, s
+   * @private
+   */
+  _processEvmSignature(rawSignature) {
+    const handler = this._handler || getHandler(this.blockchain);
+    const signaturePair = new TxSignature();
+
+    // For EVM, the signature contains v, r, s components
+    const { v, r, s, from } = rawSignature;
+
+    // Store signature as JSON for EVM
+    signaturePair.signature = JSON.stringify({ v, r, s });
+
+    // The signer is the 'from' address (recovered from the signature)
+    const signerAddress = from?.toLowerCase();
+
+    if (signerAddress) {
+      // Verify this signer is expected (if we have potential signers)
+      if (
+        this.potentialSigners.length === 0 ||
+        this.potentialSigners.some(
+          (addr) => addr.toLowerCase() === signerAddress
+        )
+      ) {
+        signaturePair.key = signerAddress;
+
+        // Check for duplicates
+        if (!this.txInfo.signatures.some((s) => s.key === signaturePair.key)) {
+          this.txInfo.signatures.push(signaturePair);
+          this.accepted.push(signaturePair);
+        }
+      } else {
+        signaturePair.key = signerAddress;
+        this.rejected.push(signaturePair);
+      }
+    } else {
+      signaturePair.key = "unknown";
+      this.rejected.push(signaturePair);
+    }
+  }
+
+  /**
+   * @param {Object} rawSignature
+   */
+  processSignature(rawSignature) {
+    if (isEvmBlockchain(this.blockchain)) {
+      this._processEvmSignature(rawSignature);
+    } else {
+      this._processStellarSignature(rawSignature);
+    }
+  }
+
+  /**
+   * Verify Stellar signature
+   * @private
+   */
+  _verifyStellarSignature(key, signature) {
     return Keypair.fromPublicKey(key).verify(this.hashRaw, signature);
+  }
+
+  verifySignature(key, signature) {
+    if (isEvmBlockchain(this.blockchain)) {
+      // For EVM, verification happens during signature recovery
+      const handler = this._handler || getHandler(this.blockchain);
+      return handler.verifySignedTransaction(this.tx, key);
+    }
+    return this._verifyStellarSignature(key, signature);
   }
 
   processNewSignatures() {
     if (!this.signaturesToProcess.length) return;
-    //skip existing
-    const newSignatures = this.signaturesToProcess.filter((sig) => {
-      const newSignature = sig.signature().toString("base64");
-      return !this.txInfo.signatures.some(
-        (existing) => existing.signature === newSignature
-      );
-    });
-    //search for invalid signature
-    for (let signature of newSignatures) {
-      this.processSignature(signature);
+
+    if (isEvmBlockchain(this.blockchain)) {
+      // For EVM, process the already-extracted signatures
+      for (let signature of this.signaturesToProcess) {
+        // Check if this signature is already stored
+        const sigJson = JSON.stringify({
+          v: signature.v,
+          r: signature.r,
+          s: signature.s,
+        });
+        if (
+          !this.txInfo.signatures.some(
+            (existing) => existing.signature === sigJson
+          )
+        ) {
+          this.processSignature(signature);
+        }
+      }
+    } else {
+      // Stellar path - skip existing
+      const newSignatures = this.signaturesToProcess.filter((sig) => {
+        const newSignature = sig.signature().toString("base64");
+        return !this.txInfo.signatures.some(
+          (existing) => existing.signature === newSignature
+        );
+      });
+      //search for invalid signature
+      for (let signature of newSignatures) {
+        this.processSignature(signature);
+      }
     }
+
     //save changes if any
     if (this.accepted.length && this.status !== "created") {
       this.setStatus("updated");

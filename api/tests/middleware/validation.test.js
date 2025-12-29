@@ -89,9 +89,13 @@ describe("Validation Middleware", () => {
         expect(mockRes.json).toHaveBeenCalledWith(
           expect.objectContaining({
             error: "Validation failed",
+            // With the new blockchain-agnostic schema, we get an "alternatives" error
+            // because neither legacy (xdr+network) nor blockchain-agnostic (txUri/payload) format is complete
             details: expect.arrayContaining([
               expect.objectContaining({
-                field: "xdr",
+                message: expect.stringMatching(
+                  /does not match any of the allowed types/
+                ),
               }),
             ]),
           })

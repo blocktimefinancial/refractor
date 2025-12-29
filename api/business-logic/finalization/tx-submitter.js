@@ -1,0 +1,214 @@
+/**
+ * Transaction Submitter
+ *
+ * Routes transaction submissions to the appropriate blockchain handler.
+ * Supports Stellar and EVM-compatible chains.
+ *
+ * @module business-logic/finalization/tx-submitter
+ */
+
+const { hasHandler, getHandler } = require("../handlers/handler-factory");
+const { isEvmBlockchain, EVM_BLOCKCHAINS } = require("../handlers/evm-handler");
+const {
+  submitTransaction: submitStellarTransaction,
+} = require("./horizon-handler");
+const {
+  getBlockchainConfig,
+  getNetworkConfig,
+} = require("../blockchain-registry");
+const logger = require("../../utils/logger").forComponent("tx-submitter");
+
+/**
+ * Submit an EVM transaction to the network
+ * @param {Object} txInfo - Transaction info
+ * @returns {Promise<Object>} Updated transaction info with result
+ */
+async function submitEvmTransaction(txInfo) {
+  const blockchain = txInfo.blockchain;
+  const networkName = txInfo.networkName || "mainnet";
+  const networkConfig = getNetworkConfig(blockchain, networkName);
+
+  if (!networkConfig) {
+    throw Object.assign(
+      new Error(`Unknown network: ${blockchain}/${networkName}`),
+      { status: 400 }
+    );
+  }
+
+  // Get RPC endpoint from config or environment
+  const rpcUrl =
+    networkConfig.rpc || process.env[`${blockchain.toUpperCase()}_RPC_URL`];
+
+  if (!rpcUrl) {
+    throw Object.assign(
+      new Error(
+        `No RPC endpoint configured for ${blockchain}/${networkName}. Set ${blockchain.toUpperCase()}_RPC_URL environment variable.`
+      ),
+      { status: 501 }
+    );
+  }
+
+  logger.info("Submitting EVM transaction", {
+    hash: txInfo.hash,
+    blockchain,
+    network: networkName,
+    rpcUrl: rpcUrl.replace(/\/\/.*@/, "//***@"), // Hide credentials
+  });
+
+  // Get the signed transaction payload
+  const payload = txInfo.payload.startsWith("0x")
+    ? txInfo.payload
+    : `0x${txInfo.payload}`;
+
+  try {
+    // Use eth_sendRawTransaction RPC method
+    const response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_sendRawTransaction",
+        params: [payload],
+      }),
+    });
+
+    const result = await response.json();
+
+    if (result.error) {
+      logger.error("EVM transaction submission failed", {
+        hash: txInfo.hash,
+        error: result.error,
+      });
+
+      txInfo.status = "failed";
+      txInfo.error = {
+        code: result.error.code,
+        message: result.error.message,
+      };
+      return txInfo;
+    }
+
+    // Success - result.result contains the transaction hash
+    logger.info("EVM transaction submitted successfully", {
+      hash: txInfo.hash,
+      txHash: result.result,
+    });
+
+    txInfo.status = "submitted";
+    txInfo.result = {
+      hash: result.result,
+      submittedAt: new Date().toISOString(),
+    };
+
+    return txInfo;
+  } catch (error) {
+    logger.error("EVM transaction submission error", {
+      hash: txInfo.hash,
+      error: error.message,
+    });
+
+    txInfo.status = "failed";
+    txInfo.error = {
+      message: error.message,
+    };
+    return txInfo;
+  }
+}
+
+/**
+ * Submit a transaction to the appropriate blockchain
+ * @param {Object} txInfo - Transaction info with blockchain field
+ * @returns {Promise<Object>} Updated transaction info with result
+ */
+async function submitTransaction(txInfo) {
+  const blockchain = txInfo.blockchain || "stellar";
+
+  logger.debug("Submitting transaction", {
+    hash: txInfo.hash,
+    blockchain,
+    network: txInfo.networkName || txInfo.network,
+  });
+
+  // Route to appropriate blockchain handler
+  switch (blockchain) {
+    case "stellar":
+      return submitStellarTransaction(txInfo);
+
+    // EVM-compatible blockchains
+    case "ethereum":
+    case "polygon":
+    case "arbitrum":
+    case "optimism":
+    case "base":
+    case "avalanche":
+      return submitEvmTransaction(txInfo);
+
+    default:
+      // Check if it's an EVM chain
+      if (isEvmBlockchain(blockchain)) {
+        return submitEvmTransaction(txInfo);
+      }
+
+      // Check if blockchain is recognized in registry (but submission not implemented)
+      const blockchainConfig = getBlockchainConfig(blockchain);
+      if (blockchainConfig) {
+        const error = new Error(
+          `Transaction submission not yet implemented for blockchain: ${blockchain}`
+        );
+        error.name = "NotImplementedError";
+        error.status = 501;
+        throw error;
+      } else {
+        const error = new Error(`Unsupported blockchain: ${blockchain}`);
+        error.name = "UnsupportedBlockchainError";
+        error.status = 400;
+        throw error;
+      }
+  }
+}
+
+/**
+ * Check if transaction submission is supported for a blockchain
+ * @param {string} blockchain - Blockchain identifier
+ * @returns {boolean} True if submission is supported
+ */
+function isSubmissionSupported(blockchain) {
+  const normalizedBlockchain = blockchain.toLowerCase();
+  const supportedBlockchains = [
+    "stellar",
+    "ethereum",
+    "polygon",
+    "arbitrum",
+    "optimism",
+    "base",
+    "avalanche",
+  ];
+  return (
+    supportedBlockchains.includes(normalizedBlockchain) ||
+    isEvmBlockchain(normalizedBlockchain)
+  );
+}
+
+/**
+ * Get list of blockchains that support transaction submission
+ * @returns {Array<string>} List of blockchain identifiers
+ */
+function getSupportedSubmissionBlockchains() {
+  return [
+    "stellar",
+    "ethereum",
+    "polygon",
+    "arbitrum",
+    "optimism",
+    "base",
+    "avalanche",
+  ];
+}
+
+module.exports = {
+  submitTransaction,
+  submitEvmTransaction,
+  isSubmissionSupported,
+  getSupportedSubmissionBlockchains,
+};

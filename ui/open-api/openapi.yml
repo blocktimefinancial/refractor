@@ -1,98 +1,151 @@
 openapi: 3.0.2
 info:
   title: Refractor
-  version: 0.1.1
+  version: 0.2.0
   description: |
-    [Refractor](/) is a pending transactions storage and multisig aggregator for Stellar Network.
+    [Refractor](/) is a blockchain-agnostic pending transactions storage and multisig aggregator.
+
+    ## Supported Blockchains
+
+    Refractor supports multiple blockchains with a unified API:
+    - **Stellar** (full support with automatic submission)
+    - **Ethereum**, **Polygon**, **Arbitrum**, **Optimism**, **Base**, **Avalanche** (transaction storage)
+    - **Solana**, **Bitcoin**, **Algorand**, **Aptos** (transaction storage)
 
     ## How it works
 
     This service allows anyone to store transactions and gather signatures required to match the signing threshold.
 
     Any eligible signer can sign the transaction. As soon as it reaches the required threshold (calculated
-    automatically), the service either submits the transaction to Stellar network or executes a callback.
+    automatically), the service either submits the transaction to the blockchain network or executes a callback.
 
     Once uploaded to the server, the transaction cannot be deleted or modified. Other services and wallets can access
     and sign it by a standard URL like `https://api.refractor.space/tx/4b50...3dad` where its hash serves as
     a unique identifier.
 
-    Refractor automatically discovers potential signers and computes the thresholds. The signing process is
-    fully coordinated, signatures aggregation occurs on the server side which in turn allows us to deal with
-    potentially problematic cases like applying signatures from two different signers concurrently or preventing
-    handling `TX_BAD_AUTH_EXTRA` errors in case of too many signatures applied to a transaction.
-    Refractor ensures that signatures are valid and consistent.
+    ## Transaction URI Formats
 
-  termsOfService: 'https://refractor.space/'
+    Refractor supports two URI formats for submitting transactions:
+
+    ### Simple Format
+    ```
+    tx:<blockchain>[:<network>];<encoding>,<payload>
+    ```
+    Examples:
+    - `tx:stellar:testnet;base64,AAAAAgAAAABT...`
+    - `tx:ethereum:sepolia;hex,0x02f87...`
+
+    ### CAIP Format (Chain Agnostic Improvement Proposals)
+    ```
+    <blockchain>://<namespace>:<chain_id>/tx/<encoding>;<payload>
+    ```
+    Examples:
+    - `stellar://stellar:1/tx/base64;AAAAAgAAAABT...`
+    - `ethereum://eip155:11155111/tx/hex;0x02f87...`
+
+  termsOfService: "https://refractor.space/"
   contact:
-    url: 'https://refractor.space/'
+    url: "https://refractor.space/"
     email: info@stellar.expert
   license:
     name: MIT
-    url: 'https://tldrlegal.com/license/mit-license'
+    url: "https://tldrlegal.com/license/mit-license"
   x-logo:
-    url: 'https://refractor.space/img/refractor-small-logo.png'
+    url: "https://refractor.space/img/refractor-small-logo.png"
 servers:
-  - url: 'https://api.refractor.space'
+  - url: "https://api.refractor.space"
 paths:
   /tx:
     post:
       requestBody:
-        description: Transaction description
+        description: Transaction description (supports legacy, txUri, or component formats)
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TxRequest'
+              oneOf:
+                - $ref: "#/components/schemas/TxRequestLegacy"
+                - $ref: "#/components/schemas/TxRequestUri"
+                - $ref: "#/components/schemas/TxRequestComponents"
+            examples:
+              legacy:
+                summary: Legacy Stellar format
+                value:
+                  network: testnet
+                  xdr: AAAAAgAAAABTWgh1bRm6Aksd3hHdZ0h...
+                  submit: true
+              txUri:
+                summary: Transaction URI format
+                value:
+                  txUri: "tx:stellar:testnet;base64,AAAAAgAAAABTWgh1bRm6Aksd3hHdZ0h..."
+                  submit: true
+              components:
+                summary: Component format
+                value:
+                  blockchain: stellar
+                  networkName: testnet
+                  payload: AAAAAgAAAABTWgh1bRm6Aksd3hHdZ0h...
+                  encoding: base64
+                  submit: true
         required: true
       tags:
-        - '/tx endpoint'
+        - "/tx endpoint"
       responses:
-        '200':
-          description: Transaction stored/updated sucessfully
+        "200":
+          description: Transaction stored/updated successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TxInfo'
-        '400':
+                $ref: "#/components/schemas/TxInfo"
+        "400":
           description: |
-            Invalid paremters, possible errors:
+            Invalid parameters, possible errors:
             - Unidentified network
-            - Invalid transaction XDR
+            - Invalid transaction XDR/payload
             - Invalid URL supplied in "callbackUrl" parameter
             - Invalid "requestedSigners" parameter
             - Invalid "expires" parameter
-            - Invalid transactions "timebounds.maxTime" value - the transaction already expired
-        '406':
+            - Invalid transaction "timebounds.maxTime" value - the transaction already expired
+            - Unsupported blockchain
+        "406":
           description: |
             Not supported, possible errors:
             - FeeBump transactions not supported
+        "501":
+          description: |
+            Not implemented, possible errors:
+            - Transaction submission not yet implemented for blockchain
       summary: Store a transaction
       description: >-
-        Sends a transaction (with or without signatures) to the server. If the
-        transaction with the same hash doesn't exist on the server yet, the
+        Sends a transaction (with or without signatures) to the server. Supports three request formats:
+
+        1. **Legacy format**: Uses `network` and `xdr` fields (Stellar only)
+        2. **URI format**: Uses `txUri` field with transaction URI
+        3. **Component format**: Uses `blockchain`, `networkName`, `payload`, and `encoding` fields
+
+        If the transaction with the same hash doesn't exist on the server yet, the
         transaction and its signatures are stored on the server. Otherwise,
         Refractor finds new signatures and applies them to the existing
-        transaction. Invalid or redundant signatures are discarded
-        automatically.
+        transaction. Invalid or redundant signatures are discarded automatically.
       operationId: submitTx
-  '/tx/{txHash}':
+  "/tx/{txHash}":
     get:
       tags:
-        - '/tx endpoint'
+        - "/tx endpoint"
       parameters:
         - name: txHash
           description: Transaction hash
           in: path
           required: true
           schema:
-            $ref: '#/components/schemas/TxHash'
+            $ref: "#/components/schemas/TxHash"
       responses:
-        '200':
+        "200":
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TxInfo'
+                $ref: "#/components/schemas/TxInfo"
           description: Transaction info retrieved
-        '404':
+        "404":
           description: Transaction not found
       operationId: getTxByHash
       summary: Retrieve transaction info
@@ -105,9 +158,138 @@ components:
       description: Transaction hash
       type: string
       example: a1ef625e2bda7e71493b8a6bb4b03fa6512a67593d99acacfe5fb59b79e28154
-      pattern: '/^[a-f0-9]{64}$/'
+      pattern: "/^[a-f0-9]{64}$/"
+
+    Blockchain:
+      description: Blockchain identifier
+      type: string
+      enum:
+        - stellar
+        - ethereum
+        - polygon
+        - arbitrum
+        - optimism
+        - base
+        - avalanche
+        - solana
+        - bitcoin
+        - algorand
+        - aptos
+        - onemoney
+      example: stellar
+
+    StellarNetwork:
+      description: Stellar network name
+      type: string
+      enum:
+        - public
+        - testnet
+        - futurenet
+      example: testnet
+
+    Encoding:
+      description: Transaction payload encoding
+      type: string
+      enum:
+        - base64
+        - hex
+        - base58
+        - msgpack
+        - base32
+      example: base64
+
+    TxRequestLegacy:
+      description: Legacy transaction request (Stellar only)
+      required:
+        - network
+        - xdr
+      type: object
+      properties:
+        network:
+          $ref: "#/components/schemas/StellarNetwork"
+        xdr:
+          description: Base64-encoded Stellar transaction XDR with or without signatures
+          type: string
+          example: AAAAAgAAAABTWgh1bRm6Aksd3hHdZ0h…
+        expires:
+          description: >-
+            Transaction expiration date (UNIX timestamp), by default equals the
+            transaction maxTime if not set
+          default: Current date + 30 days
+          type: integer
+          example: 1727178665
+        callbackUrl:
+          description: Callback URL where the transaction will be POSTed once ready
+          type: string
+          example: "https://my.server/tx-signed"
+        submit:
+          description: >-
+            Whether the transaction should be automatically submitted to the network
+            once ready
+          default: false
+          type: boolean
+
+    TxRequestUri:
+      description: Transaction request using URI format
+      required:
+        - txUri
+      type: object
+      properties:
+        txUri:
+          description: |
+            Transaction URI in simple or CAIP format.
+            Simple: `tx:<blockchain>[:<network>];<encoding>,<payload>`
+            CAIP: `<blockchain>://<namespace>:<chain_id>/tx/<encoding>;<payload>`
+          type: string
+          example: "tx:stellar:testnet;base64,AAAAAgAAAABTWgh1bRm6Aksd3hHdZ0h..."
+        expires:
+          description: Transaction expiration date (UNIX timestamp)
+          type: integer
+          example: 1727178665
+        callbackUrl:
+          description: Callback URL where the transaction will be POSTed once ready
+          type: string
+          example: "https://my.server/tx-signed"
+        submit:
+          description: Whether the transaction should be automatically submitted once ready
+          default: false
+          type: boolean
+
+    TxRequestComponents:
+      description: Transaction request using component fields
+      required:
+        - blockchain
+        - payload
+      type: object
+      properties:
+        blockchain:
+          $ref: "#/components/schemas/Blockchain"
+        networkName:
+          description: Network name (e.g., public, testnet, mainnet, sepolia)
+          type: string
+          example: testnet
+        payload:
+          description: Encoded transaction payload
+          type: string
+          example: AAAAAgAAAABTWgh1bRm6Aksd3hHdZ0h…
+        encoding:
+          $ref: "#/components/schemas/Encoding"
+        expires:
+          description: Transaction expiration date (UNIX timestamp)
+          type: integer
+          example: 1727178665
+        callbackUrl:
+          description: Callback URL where the transaction will be POSTed once ready
+          type: string
+          example: "https://my.server/tx-signed"
+        submit:
+          description: Whether the transaction should be automatically submitted once ready
+          default: false
+          type: boolean
+
     TxRequest:
-      description: Transaction descriptor
+      description: Transaction descriptor (deprecated, use TxRequestUri or TxRequestComponents)
+      deprecated: true
       required:
         - network
         - xdr
@@ -134,7 +316,7 @@ components:
         callbackUrl:
           description: Callback URL where the transaction will be POSTed once ready
           type: string
-          example: 'https://my.server/tx-signed'
+          example: "https://my.server/tx-signed"
         submit:
           description: >-
             Whether the transaction should be automatically submitted to Horizon
@@ -157,8 +339,23 @@ components:
       description: Transaction descriptor
       type: object
       properties:
+        hash:
+          description: Transaction hash
+          type: string
+          example: a1ef625e2bda7e71493b8a6bb4b03fa6512a67593d99acacfe5fb59b79e28154
+        blockchain:
+          $ref: "#/components/schemas/Blockchain"
+        networkName:
+          description: Network name
+          type: string
+          example: testnet
+        txUri:
+          description: Transaction URI (simple format)
+          type: string
+          example: "tx:stellar:testnet;base64,AAAAAgAAAABT..."
         network:
-          description: Stellar network name ("public" or "testnet")
+          description: Stellar network name (legacy, deprecated)
+          deprecated: true
           enum:
             - public
             - testnet
@@ -168,6 +365,12 @@ components:
           description: Base64-encoded Stellar transaction XDR with or without signatures
           type: string
           example: AAAAAgAAAABTWgh1bRm6Aksd3hHdZ0h…
+        payload:
+          description: Encoded transaction payload
+          type: string
+          example: AAAAAgAAAABTWgh1bRm6Aksd3hHdZ0h…
+        encoding:
+          $ref: "#/components/schemas/Encoding"
         minTime:
           description: Point in time when a transaction becomes valid (populated from a tx timebounds)
           type: integer
@@ -179,16 +382,16 @@ components:
         callbackUrl:
           description: Callback URL where the transaction will be POSTed once ready
           type: string
-          example: 'https://my.server/tx-signed'
+          example: "https://my.server/tx-signed"
         submit:
-          description: Whether the transaction should be automatically submitted to Horizon once ready
+          description: Whether the transaction should be automatically submitted to the network once ready
           default: false
           type: boolean
         signatures:
           description: Applied transaction signatures
           type: array
           items:
-            $ref: '#/components/schemas/TxSignature'
+            $ref: "#/components/schemas/TxSignature"
         status:
           description: Current transaction status
           type: string
@@ -204,4 +407,4 @@ components:
           type: integer
           example: 1627178665
 tags:
-  - name: '/tx endpoint'
+  - name: "/tx endpoint"

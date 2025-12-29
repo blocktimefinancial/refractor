@@ -202,7 +202,11 @@ class MongooseDataProvider extends DataProvider {
 
   /**
    * List transactions with enhanced filtering
-   * @param {Object} filter
+   * @param {Object} filter - Query filter
+   * @param {string} [filter.status] - Transaction status
+   * @param {string} [filter.blockchain] - Blockchain identifier
+   * @param {string} [filter.networkName] - Network name
+   * @param {number} [filter.network] - Legacy Stellar network ID
    * @returns {AsyncIterable}
    */
   listTransactions(filter = {}) {
@@ -224,8 +228,16 @@ class MongooseDataProvider extends DataProvider {
       hash: "$_id",
       _id: 0,
       status: 1,
+      // Legacy Stellar fields
       network: 1,
       xdr: 1,
+      // Blockchain-agnostic fields
+      blockchain: 1,
+      networkName: 1,
+      payload: 1,
+      encoding: 1,
+      txUri: 1,
+      // Common fields
       callbackUrl: 1,
       maxTime: 1,
       minTime: 1,
@@ -246,18 +258,49 @@ class MongooseDataProvider extends DataProvider {
    * Get transaction statistics
    * @returns {Promise<Object>}
    */
-  async getTransactionStats() {
-    const stats = await TxModel.aggregate([
-      {
-        $group: {
-          _id: "$status",
-          count: { $sum: 1 },
-          avgRetryCount: { $avg: "$retryCount" },
-        },
-      },
-    ]);
+  async getTransactionStats(filter = {}) {
+    const matchStage = {};
 
-    const total = await TxModel.countDocuments();
+    // Apply blockchain filter if provided
+    if (filter.blockchain) {
+      matchStage.blockchain = filter.blockchain;
+    }
+
+    const pipeline = [];
+
+    // Add match stage if there are any filters
+    if (Object.keys(matchStage).length > 0) {
+      pipeline.push({ $match: matchStage });
+    }
+
+    pipeline.push({
+      $group: {
+        _id: "$status",
+        count: { $sum: 1 },
+        avgRetryCount: { $avg: "$retryCount" },
+      },
+    });
+
+    const stats = await TxModel.aggregate(pipeline);
+
+    const total = await TxModel.countDocuments(matchStage);
+
+    // Get blockchain breakdown if no specific filter
+    let byBlockchain = null;
+    if (!filter.blockchain) {
+      const blockchainStats = await TxModel.aggregate([
+        {
+          $group: {
+            _id: { $ifNull: ["$blockchain", "stellar"] },
+            count: { $sum: 1 },
+          },
+        },
+      ]);
+      byBlockchain = blockchainStats.reduce((acc, stat) => {
+        acc[stat._id] = stat.count;
+        return acc;
+      }, {});
+    }
 
     return {
       total,
@@ -268,6 +311,8 @@ class MongooseDataProvider extends DataProvider {
         };
         return acc;
       }, {}),
+      ...(byBlockchain && { byBlockchain }),
+      ...(filter.blockchain && { blockchain: filter.blockchain }),
     };
   }
 

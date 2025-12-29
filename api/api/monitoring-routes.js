@@ -10,6 +10,7 @@ const {
   reloadBlacklist,
 } = require("../middleware/cors");
 const logger = require("../utils/logger").forComponent("monitoring");
+const { isValidBlockchain } = require("../business-logic/blockchain-registry");
 
 const router = express.Router();
 
@@ -27,16 +28,30 @@ const getLogger = (req) => {
 
 /**
  * Get queue metrics and status
+ * @query {string} [blockchain] - Filter stats by blockchain (optional)
  */
 router.get("/metrics", async (req, res) => {
   try {
+    const { blockchain } = req.query;
+
+    // Validate blockchain filter if provided
+    if (blockchain && !isValidBlockchain(blockchain)) {
+      return res.status(400).json({
+        error: `Invalid blockchain: ${blockchain}`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     const finalizerMetrics = finalizer.getQueueMetrics();
     const finalizerStatus = finalizer.getQueueStatus();
 
     // Get database statistics if using Mongoose
     let dbStats = null;
     if (storageLayer.dataProvider.getTransactionStats) {
-      dbStats = await storageLayer.dataProvider.getTransactionStats();
+      // Pass blockchain filter if provided
+      dbStats = await storageLayer.dataProvider.getTransactionStats(
+        blockchain ? { blockchain } : undefined
+      );
     }
 
     res.json({
@@ -45,6 +60,7 @@ router.get("/metrics", async (req, res) => {
         status: finalizerStatus,
       },
       database: dbStats,
+      ...(blockchain && { blockchain }),
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

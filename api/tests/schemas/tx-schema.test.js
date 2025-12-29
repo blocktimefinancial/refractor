@@ -71,29 +71,32 @@ describe("Transaction Schemas", () => {
         expect(error).toBeDefined();
       });
 
-      it("should reject invalid public key format", () => {
-        const invalidKeys = [
+      // Note: With blockchain-agnostic design, the generic txSignatureSchema
+      // accepts any string format. Use stellarSignatureSchema or evmSignatureSchema
+      // for blockchain-specific validation.
+      it("should accept any key format (blockchain-agnostic)", () => {
+        const anyKeys = [
           "INVALID",
-          "SBJVUCDVNUM3UASLDXPBDXLHJBSVOEGTJX5J6P3JD7DQKVQCYCBY5PP2", // S prefix (secret key)
-          "GBJVUCDVNUM3UASLDXPBDXLHJBSVOEGTJX5J6P3JD7DQKVQCYCBY5PP", // Too short
-          "gbjvucdvnum3uasldxpbdxlhjbsvoegtjx5j6p3jd7dqkvqcycby5pp2", // Lowercase
+          "SBJVUCDVNUM3UASLDXPBDXLHJBSVOEGTJX5J6P3JD7DQKVQCYCBY5PP2", // S prefix
+          "0x742d35Cc6634C0532925a3b844Bc9e7595f8fEc5", // EVM address
+          "any-valid-string-key",
         ];
 
-        invalidKeys.forEach((key) => {
+        anyKeys.forEach((key) => {
           const { error } = txSignatureSchema.validate({
             ...validSignature,
             key,
           });
-          expect(error).toBeDefined();
+          expect(error).toBeUndefined();
         });
       });
 
-      it("should reject non-base64 signature", () => {
+      it("should accept any signature format (blockchain-agnostic)", () => {
         const { error } = txSignatureSchema.validate({
           ...validSignature,
-          signature: "not-valid-base64!!!",
+          signature: "any-signature-format",
         });
-        expect(error).toBeDefined();
+        expect(error).toBeUndefined();
       });
     });
   });
@@ -372,6 +375,310 @@ describe("Transaction Schemas", () => {
         const { value } = txModelSchema.validate(validModel);
         expect(value.signatures).toEqual([]);
       });
+
+      it("should default blockchain to stellar", () => {
+        const { value } = txModelSchema.validate(validModel);
+        expect(value.blockchain).toBe("stellar");
+      });
+
+      it("should default encoding to base64", () => {
+        const { value } = txModelSchema.validate(validModel);
+        expect(value.encoding).toBe("base64");
+      });
+    });
+  });
+});
+
+/**
+ * Blockchain-Agnostic Schema Tests
+ */
+const {
+  legacyStellarSubmissionSchema,
+  blockchainAgnosticSubmissionSchema,
+  stellarSignatureSchema,
+  evmSignatureSchema,
+  genericSignatureSchema,
+  supportedBlockchains,
+} = require("../../schemas/tx-schema");
+
+describe("Blockchain-Agnostic Schemas", () => {
+  describe("supportedBlockchains", () => {
+    it("should include stellar", () => {
+      expect(supportedBlockchains).toContain("stellar");
+    });
+
+    it("should include ethereum", () => {
+      expect(supportedBlockchains).toContain("ethereum");
+    });
+
+    it("should include solana", () => {
+      expect(supportedBlockchains).toContain("solana");
+    });
+
+    it("should include multiple blockchains", () => {
+      expect(supportedBlockchains.length).toBeGreaterThan(5);
+    });
+  });
+
+  describe("stellarSignatureSchema", () => {
+    it("should accept valid Stellar signature", () => {
+      const { error } = stellarSignatureSchema.validate({
+        key: "GBJVUCDVNUM3UASLDXPBDXLHJBSVOEGTJX5J6P3JD7DQKVQCYCBY5PP2",
+        signature: "YWJjZGVmZ2hpamtsbW5vcA==",
+      });
+      expect(error).toBeUndefined();
+    });
+
+    it("should reject non-G-prefix key", () => {
+      const { error } = stellarSignatureSchema.validate({
+        key: "0x1234567890abcdef1234567890abcdef12345678",
+        signature: "YWJjZGVmZ2hpamtsbW5vcA==",
+      });
+      expect(error).toBeDefined();
+    });
+  });
+
+  describe("evmSignatureSchema", () => {
+    it("should accept valid Ethereum signature", () => {
+      const { error } = evmSignatureSchema.validate({
+        key: "0x1234567890abcdef1234567890abcdef12345678",
+        signature:
+          "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+      });
+      expect(error).toBeUndefined();
+    });
+
+    it("should reject non-0x-prefix address", () => {
+      const { error } = evmSignatureSchema.validate({
+        key: "GBJVUCDVNUM3UASLDXPBDXLHJBSVOEGTJX5J6P3JD7DQKVQCYCBY5PP2",
+        signature: "0xabcdef",
+      });
+      expect(error).toBeDefined();
+    });
+
+    it("should reject address with wrong length", () => {
+      const { error } = evmSignatureSchema.validate({
+        key: "0x123456",
+        signature: "0xabcdef",
+      });
+      expect(error).toBeDefined();
+    });
+  });
+
+  describe("genericSignatureSchema", () => {
+    it("should accept any key format", () => {
+      const { error } = genericSignatureSchema.validate({
+        key: "any-key-format-here",
+        signature: "any-signature",
+        encoding: "base64",
+      });
+      expect(error).toBeUndefined();
+    });
+
+    it("should default encoding to base64", () => {
+      const { value } = genericSignatureSchema.validate({
+        key: "key",
+        signature: "sig",
+      });
+      expect(value.encoding).toBe("base64");
+    });
+
+    it("should accept hex encoding", () => {
+      const { error } = genericSignatureSchema.validate({
+        key: "key",
+        signature: "sig",
+        encoding: "hex",
+      });
+      expect(error).toBeUndefined();
+    });
+  });
+
+  describe("legacyStellarSubmissionSchema", () => {
+    const validLegacy = {
+      xdr: "AAAAAgAAAABTWgh1bRm6Aksd3hHdZ0hlVxDTTfqfP2kfxwVWAsCDjgAAAGQAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAABTWgh1bRm6Aksd3hHdZ0hlVxDTTfqfP2kfxwVWAsCDjgAAAAAAAAAAAJiWgAAAAAAAAAAA",
+      network: 1,
+    };
+
+    it("should accept legacy Stellar format", () => {
+      const { error } = legacyStellarSubmissionSchema.validate(validLegacy);
+      expect(error).toBeUndefined();
+    });
+
+    it("should accept network as string", () => {
+      const { error } = legacyStellarSubmissionSchema.validate({
+        ...validLegacy,
+        network: "testnet",
+      });
+      expect(error).toBeUndefined();
+    });
+
+    it("should require xdr", () => {
+      const { error } = legacyStellarSubmissionSchema.validate({
+        network: 1,
+      });
+      expect(error).toBeDefined();
+    });
+
+    it("should require network", () => {
+      const { error } = legacyStellarSubmissionSchema.validate({
+        xdr: validLegacy.xdr,
+      });
+      expect(error).toBeDefined();
+    });
+  });
+
+  describe("blockchainAgnosticSubmissionSchema", () => {
+    describe("txUri format", () => {
+      it("should accept txUri submission", () => {
+        const { error } = blockchainAgnosticSubmissionSchema.validate({
+          txUri: "tx:stellar:testnet;base64,AAAAAgAAAABT...",
+        });
+        expect(error).toBeUndefined();
+      });
+
+      it("should accept CAIP format txUri", () => {
+        const { error } = blockchainAgnosticSubmissionSchema.validate({
+          txUri: "blockchain://eip155:1/tx/hex;0x1234...",
+        });
+        expect(error).toBeUndefined();
+      });
+    });
+
+    describe("component format", () => {
+      it("should accept blockchain + networkName + payload", () => {
+        const { error } = blockchainAgnosticSubmissionSchema.validate({
+          blockchain: "ethereum",
+          networkName: "mainnet",
+          payload: "0x1234567890abcdef",
+          encoding: "hex",
+        });
+        expect(error).toBeUndefined();
+      });
+
+      it("should require blockchain with payload", () => {
+        const { error } = blockchainAgnosticSubmissionSchema.validate({
+          networkName: "mainnet",
+          payload: "0x1234",
+        });
+        expect(error).toBeDefined();
+      });
+
+      it("should require networkName with payload", () => {
+        const { error } = blockchainAgnosticSubmissionSchema.validate({
+          blockchain: "ethereum",
+          payload: "0x1234",
+        });
+        expect(error).toBeDefined();
+      });
+
+      it("should require either txUri or payload", () => {
+        const { error } = blockchainAgnosticSubmissionSchema.validate({
+          blockchain: "ethereum",
+          networkName: "mainnet",
+        });
+        expect(error).toBeDefined();
+      });
+    });
+
+    describe("common fields", () => {
+      it("should accept submit flag", () => {
+        const { error, value } = blockchainAgnosticSubmissionSchema.validate({
+          txUri: "tx:stellar:testnet;base64,data",
+          submit: true,
+        });
+        expect(error).toBeUndefined();
+        expect(value.submit).toBe(true);
+      });
+
+      it("should accept callbackUrl", () => {
+        const { error } = blockchainAgnosticSubmissionSchema.validate({
+          txUri: "tx:stellar:testnet;base64,data",
+          callbackUrl: "https://example.com/callback",
+        });
+        expect(error).toBeUndefined();
+      });
+
+      it("should accept desiredSigners", () => {
+        const { error } = blockchainAgnosticSubmissionSchema.validate({
+          txUri: "tx:stellar:testnet;base64,data",
+          desiredSigners: ["signer1", "signer2"],
+        });
+        expect(error).toBeUndefined();
+      });
+
+      it("should accept minTime and maxTime", () => {
+        const { error } = blockchainAgnosticSubmissionSchema.validate({
+          txUri: "tx:stellar:testnet;base64,data",
+          minTime: 1000000,
+          maxTime: 2000000,
+        });
+        expect(error).toBeUndefined();
+      });
+    });
+  });
+
+  describe("txModelSchema blockchain-agnostic fields", () => {
+    const validModel = {
+      hash: "a".repeat(64),
+      blockchain: "ethereum",
+      networkName: "mainnet",
+      payload: "0x1234567890",
+      encoding: "hex",
+    };
+
+    it("should accept blockchain-agnostic model", () => {
+      const { error } = txModelSchema.validate(validModel);
+      expect(error).toBeUndefined();
+    });
+
+    it("should accept all supported blockchains", () => {
+      supportedBlockchains.forEach((blockchain) => {
+        const { error } = txModelSchema.validate({
+          ...validModel,
+          blockchain,
+        });
+        expect(error).toBeUndefined();
+      });
+    });
+
+    it("should reject unsupported blockchain", () => {
+      const { error } = txModelSchema.validate({
+        ...validModel,
+        blockchain: "unsupported-chain",
+      });
+      expect(error).toBeDefined();
+    });
+
+    it("should accept all supported encodings", () => {
+      const encodings = ["base64", "hex", "base58", "msgpack", "base32"];
+      encodings.forEach((encoding) => {
+        const { error } = txModelSchema.validate({
+          ...validModel,
+          encoding,
+        });
+        expect(error).toBeUndefined();
+      });
+    });
+
+    it("should reject unsupported encoding", () => {
+      const { error } = txModelSchema.validate({
+        ...validModel,
+        encoding: "unsupported",
+      });
+      expect(error).toBeDefined();
+    });
+
+    it("should allow null for legacy fields", () => {
+      const { error } = txModelSchema.validate({
+        hash: "a".repeat(64),
+        blockchain: "ethereum",
+        networkName: "mainnet",
+        payload: "0x1234",
+        encoding: "hex",
+        network: null,
+        xdr: null,
+      });
+      expect(error).toBeUndefined();
     });
   });
 });

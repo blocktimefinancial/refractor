@@ -9,6 +9,44 @@
       "title": "testnet",
       "horizon": "https://horizon-testnet.stellar.org",
       "passphrase": "Test SDF Network ; September 2015"
+    },
+    "futurenet": {
+      "title": "futurenet",
+      "horizon": "https://horizon-futurenet.stellar.org",
+      "passphrase": "Test SDF Future Network ; October 2022"
     }
-  }
+  },
+  "blockchains": {
+    "stellar": {
+      "name": "Stellar",
+      "defaultEncoding": "base64",
+      "networks": ["public", "testnet", "futurenet"],
+      "signingSupported": true
+    },
+    "ethereum": {
+      "name": "Ethereum",
+      "defaultEncoding": "hex",
+      "networks": ["mainnet", "sepolia", "goerli"],
+      "signingSupported": false
+    },
+    "polygon": {
+      "name": "Polygon",
+      "defaultEncoding": "hex",
+      "networks": ["mainnet", "amoy"],
+      "signingSupported": false
+    },
+    "solana": {
+      "name": "Solana",
+      "defaultEncoding": "base58",
+      "networks": ["mainnet", "devnet", "testnet"],
+      "signingSupported": false
+    },
+    "bitcoin": {
+      "name": "Bitcoin",
+      "defaultEncoding": "hex",
+      "networks": ["mainnet", "testnet"],
+      "signingSupported": false
+    }
+  },
+  "defaultBlockchain": "stellar"
 }

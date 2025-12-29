@@ -1,73 +1,214 @@
+/**
+ * Transaction Model
+ *
+ * Represents a multi-signature transaction that can be stored, signed, and submitted.
+ * Supports multiple blockchains through the blockchain-agnostic fields.
+ */
 class TxModel {
-    /**
-     * Transaction hash.
-     * @type {String}
-     */
-    hash
+  // ============================================================================
+  // Core Identification
+  // ============================================================================
 
-    /**
-     * Network (0-pubnet or 1-testnet)
-     * @type {Number}
-     */
-    network
+  /**
+   * Transaction hash (SHA-256 or blockchain-specific).
+   * @type {String}
+   */
+  hash;
 
-    /**
-     * Transaction XDR without signatures.
-     * @type {Buffer}
-     */
-    xdr
+  // ============================================================================
+  // Blockchain-Agnostic Fields (new)
+  // ============================================================================
 
-    /**
-     * Applied transaction signatures.
-     * @type {TxSignature[]}
-     */
-    signatures
+  /**
+   * Blockchain identifier (e.g., 'stellar', 'ethereum', 'solana').
+   * Defaults to 'stellar' for backward compatibility.
+   * @type {String}
+   */
+  blockchain = "stellar";
 
-    /**
-     * Submit transactions to the network once signed.
-     * @type {Boolean}
-     */
-    submit
+  /**
+   * Network name (e.g., 'public', 'testnet', 'mainnet', 'sepolia').
+   * @type {String|null}
+   */
+  networkName = null;
 
-    /**
-     * Callback URL where the transaction will be sent once signed.
-     * @type {String}
-     */
-    callbackUrl
+  /**
+   * Full transaction URI in tx: or blockchain:// format.
+   * @type {String|null}
+   */
+  txUri = null;
 
-    /**
-     * List of signers requested by the tx author.
-     * @type {String[]}
-     */
-    desiredSigners
+  /**
+   * Encoded transaction payload (format depends on blockchain).
+   * @type {String|null}
+   */
+  payload = null;
 
-    /**
-     * Point in time when a transaction becomes valid (populated from a tx timebounds).
-     * @type {Number}
-     */
-    minTime
+  /**
+   * Payload encoding format (base64, hex, base58, msgpack, base32).
+   * @type {String}
+   */
+  encoding = "base64";
 
-    /**
-     * Expiration date (UNIX timestamp).
-     * @type {Number}
-     */
-    maxTime
+  // ============================================================================
+  // Legacy Stellar Fields (kept for backward compatibility)
+  // ============================================================================
 
-    /**
-     * Current tx status.
-     * @type {TxStatus}
-     */
-    status
+  /**
+   * Legacy: Network identifier (0=pubnet, 1=testnet, 2=futurenet).
+   * Only used for Stellar transactions.
+   * @type {Number|null}
+   */
+  network = null;
 
-    /**
-     * Submitted transaction timestamp (UNIX timestamp).
-     * @type {Number}
-     */
-    submitted
+  /**
+   * Legacy: Transaction XDR without signatures (base64-encoded).
+   * Only used for Stellar transactions.
+   * @type {String|null}
+   */
+  xdr = null;
+
+  // ============================================================================
+  // Signatures
+  // ============================================================================
+
+  /**
+   * Applied transaction signatures.
+   * @type {TxSignature[]}
+   */
+  signatures = [];
+
+  // ============================================================================
+  // Submission Options
+  // ============================================================================
+
+  /**
+   * Submit transaction to the network once signed.
+   * @type {Boolean}
+   */
+  submit = false;
+
+  /**
+   * Callback URL where the transaction will be sent once signed/submitted.
+   * @type {String|null}
+   */
+  callbackUrl = null;
+
+  // ============================================================================
+  // Signer Management
+  // ============================================================================
+
+  /**
+   * List of signers requested by the transaction author.
+   * Format depends on blockchain (e.g., G... for Stellar, 0x... for Ethereum).
+   * @type {String[]}
+   */
+  desiredSigners = [];
+
+  // ============================================================================
+  // Timing
+  // ============================================================================
+
+  /**
+   * Point in time when a transaction becomes valid (UNIX timestamp).
+   * Populated from transaction timebounds.
+   * @type {Number}
+   */
+  minTime = 0;
+
+  /**
+   * Transaction expiration date (UNIX timestamp).
+   * @type {Number|null}
+   */
+  maxTime = null;
+
+  // ============================================================================
+  // Status Tracking
+  // ============================================================================
+
+  /**
+   * Current transaction status.
+   * @type {TxStatus}
+   */
+  status = "pending";
+
+  /**
+   * Submitted transaction timestamp (UNIX timestamp).
+   * Set when the transaction is submitted to the network.
+   * @type {Number|null}
+   */
+  submitted = null;
+
+  /**
+   * Number of processing retry attempts.
+   * @type {Number}
+   */
+  retryCount = 0;
+
+  /**
+   * Last error message if processing failed.
+   * @type {String|null}
+   */
+  lastError = null;
+
+  // ============================================================================
+  // Timestamps
+  // ============================================================================
+
+  /**
+   * Record creation timestamp.
+   * @type {Date}
+   */
+  createdAt = null;
+
+  /**
+   * Record last update timestamp.
+   * @type {Date}
+   */
+  updatedAt = null;
+
+  // ============================================================================
+  // Helper Methods
+  // ============================================================================
+
+  /**
+   * Check if this is a legacy Stellar transaction.
+   * @returns {Boolean}
+   */
+  isLegacyStellar() {
+    return this.xdr !== null && this.network !== null;
+  }
+
+  /**
+   * Get the effective payload (xdr for legacy, payload for new).
+   * @returns {String|null}
+   */
+  getPayload() {
+    return this.payload || this.xdr;
+  }
+
+  /**
+   * Get the effective network name.
+   * @returns {String|null}
+   */
+  getNetworkName() {
+    if (this.networkName) return this.networkName;
+    if (this.network !== null) {
+      const networkMap = { 0: "public", 1: "testnet", 2: "futurenet" };
+      return networkMap[this.network] || null;
+    }
+    return null;
+  }
 }
 
-module.exports = TxModel
+module.exports = TxModel;
 
 /**
  * @typedef {'pending'|'ready'|'processing'|'processed'|'failed'} TxStatus
+ */
+
+/**
+ * @typedef {Object} TxSignature
+ * @property {String} key - Public key or address
+ * @property {String} signature - Encoded signature
  */

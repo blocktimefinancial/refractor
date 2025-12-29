@@ -2,7 +2,8 @@ const EnhancedQueue = require("../queue/enhanced-queue"),
   storageLayer = require("../../storage/storage-layer"),
   { rehydrateTx } = require("../tx-loader"),
   { processCallback } = require("./callback-handler"),
-  { submitTransaction } = require("./horizon-handler"),
+  { submitTransaction } = require("./tx-submitter"),
+  { isSubmissionSupported } = require("./tx-submitter"),
   { getUnixTimestamp } = require("../timestamp-utils");
 const config = require("../../app.config");
 const logger = require("../../utils/logger").forComponent("finalizer");
@@ -172,9 +173,14 @@ class Finalizer {
    * @returns {Promise} - Enhanced queue expects promises, not callbacks
    */
   async processTx(txInfo) {
+    const blockchain = txInfo.blockchain || "stellar";
+    const networkName = txInfo.networkName || txInfo.network;
+
     logger.debug("Processing transaction", {
       hash: txInfo.hash,
       status: txInfo.status,
+      blockchain,
+      network: networkName,
     });
 
     if (txInfo.status !== "ready") {
@@ -230,10 +236,27 @@ class Finalizer {
       }
 
       if (txInfo.submit) {
-        logger.debug("Submitting to Horizon", { hash: txInfo.hash });
+        // Check if submission is supported for this blockchain
+        if (!isSubmissionSupported(blockchain)) {
+          logger.warn("Submission not supported for blockchain", {
+            hash: txInfo.hash,
+            blockchain,
+          });
+          throw new Error(
+            `Transaction submission not supported for blockchain: ${blockchain}`
+          );
+        }
+
+        logger.debug("Submitting transaction", {
+          hash: txInfo.hash,
+          blockchain,
+        });
         await submitTransaction(txInfoFull);
         update.submitted = getUnixTimestamp();
-        logger.info("Transaction submitted to Horizon", { hash: txInfo.hash });
+        logger.info("Transaction submitted", {
+          hash: txInfo.hash,
+          blockchain,
+        });
       }
 
       logger.debug("Updating status to processed", { hash: txInfo.hash });
